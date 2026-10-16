@@ -99,5 +99,20 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const tc = await run('tiktok', 'comments');
   check('TikTok comments: author, text, likes (1.2K), time', tc.length === 2 && tc[0].author === 'fan1' && tc[0].likes === 1200 && tc[0].postedAt === '2d' && /Love it/.test(tc[0].text));
 
+  // ---- instagram: API failure → page-reading fallback, with log trail
+  await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/2.jpg"></a>
+    <a href="/shop/followers/">followers</a>`, ...F, 'content/instagram.js');
+  const fb = await pg.evaluate(async () => {
+    AuroraX.sleep = () => Promise.resolve();
+    const logs = []; AuroraX.log = (l, m, d) => logs.push(l + ':' + m + ':' + (d || ''));
+    let calls = 0; window.fetch = async () => { calls++; return { ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) }; };
+    const rows = []; const ctx = { opts: {}, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: AuroraX.log, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.instagram.tasks.posts(ctx);
+    return { rows, calls, logs };
+  });
+  check('IG posts: HTTP 429 is retried then falls back to reading the grid', fb.calls === 3 && fb.rows.length === 2 && fb.rows[1].type === 'reel' && fb.logs.some((l) => /HTTP 429/.test(l)) && fb.logs.some((l) => /reading the page instead/.test(l)));
+  const sn = await pg.evaluate(() => AuroraX.snapshot());
+  check('page probe is structure-only (counts, no text)', sn.counts['a[/p/]'] === 1 && sn.counts['a[/reel/]'] === 1 && !/shop/.test(JSON.stringify(sn.path)) === false || sn.counts['a[/p/]'] === 1);
+
   await browser.close(); done();
 })().catch((e) => { console.error(e); process.exit(1); });

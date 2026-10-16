@@ -26,7 +26,7 @@
     const root = document.documentElement;
     let t = null;
     try { t = localStorage.getItem('aex-theme'); } catch (_) {}
-    if (toggle) { const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches; t = dark ? 'light' : 'dark'; try { localStorage.setItem('aex-theme', t); } catch (_) {} }
+    if (toggle) { const dark = root.dataset.theme === 'dark'; t = dark ? 'light' : 'dark'; try { localStorage.setItem('aex-theme', t); } catch (_) {} }
     if (t) root.dataset.theme = t;
   }
   const dl = (name, data, type) => {
@@ -144,12 +144,13 @@
       <div><h3>${live ? (r.status === 'paused' ? '⏸ Paused' : 'Collecting…') : r.status === 'error' ? '⚠️ Stopped with a problem' : '✅ Done'} <span class="note">${h(r.label)}</span></h3>
         <p>${h(r.error || r.note || (live ? 'Scrolling and reading the page. Keep that tab open.' : `${(r.count || 0).toLocaleString()} items saved.`))}</p><div class="bar"><i></i></div></div>
       <div class="actions" style="margin:0">
-        ${live ? `<button class="btn" data-a="pause">${r.status === 'paused' ? '▶ Resume' : '⏸ Pause'}</button><button class="btn danger" data-a="stop">■ Stop</button>` : `<button class="btn primary" data-a="view">View results</button>`}
+        ${live ? `<button class="btn" data-a="pause">${r.status === 'paused' ? '▶ Resume' : '⏸ Pause'}</button><button class="btn danger" data-a="stop">■ Stop</button>` : `<button class="btn primary" data-a="view">View results</button>${r.status === 'error' || !r.count ? '<button class="btn" data-a="report">🐞 Copy debug report</button>' : ''}`}
       </div>`;
     el.onclick = async (e) => {
       const a = e.target.closest('[data-a]'); if (!a) return;
       if (a.dataset.a === 'stop') await send({ type: 'stopRun', runId: r.id });
       if (a.dataset.a === 'pause') await send({ type: 'pauseRun', runId: r.id, on: r.status !== 'paused' });
+      if (a.dataset.a === 'report') reportCopy(r.id);
       if (a.dataset.a === 'view') { S.active = r.id; await loadRows(); setView('results'); }
     };
   }
@@ -192,7 +193,7 @@
     const hasThumb = S.rows.some((r) => r.media && r.media.some((m) => m.type === 'image'));
     v.innerHTML = `
       <div class="vhead"><h2>${h(run.label)}</h2>
-        <button class="btn" data-x="csv">CSV</button><button class="btn" data-x="xlsx">Excel</button><button class="btn" data-x="json">JSON</button>
+        <button class="btn" data-x="csv">CSV</button><button class="btn" data-x="xlsx">Excel</button><button class="btn" data-x="json">JSON</button><button class="btn" data-x="report" title="Copy a technical report for support">🐞 Debug</button>
         <button class="btn primary" data-x="media" ${mediaCount ? '' : 'disabled'}>⬇ Media ZIP${mediaCount ? ` (${mediaCount})` : ''}</button></div>
       <div class="vtools"><input type="search" id="q" placeholder="Search these results…" value="${h(S.q)}">
         ${emails.size ? `<button class="btn" data-x="emails">✉ Copy ${emails.size} email${emails.size > 1 ? 's' : ''}</button>` : ''}
@@ -200,7 +201,7 @@
       ${rows.length ? `<div class="tablewrap"><table><thead><tr>${hasThumb ? '<th></th>' : ''}${cols.map((c) => `<th>${h(nice(c))}</th>`).join('')}</tr></thead><tbody>
         ${shown.map((r) => `<tr>${hasThumb ? `<td>${thumb(r)}</td>` : ''}${cols.map((c) => cellHtml(r[c], c)).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="vfoot"><span>Showing ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}</span>${shown.length < rows.length ? '<button class="btn" data-x="more">Show more</button>' : ''}</div>`
-      : `<div class="empty-state"><div class="e">${run.status === 'running' ? '⏳' : '🔍'}</div><p>${run.status === 'running' ? 'Waiting for the first results…' : S.q ? 'No rows match your search.' : 'No data was found on that page.'}</p>${run.error ? `<p class="warn">${h(run.error)}</p>` : ''}</div>`}
+      : `<div class="empty-state"><div class="e">${run.status === 'running' ? '⏳' : '🔍'}</div><p>${run.status === 'running' ? 'Waiting for the first results…' : S.q ? 'No rows match your search.' : 'No data was found on that page.'}</p>${run.error ? `<p class="warn">${h(run.error)}</p>` : ''}${run.status !== 'running' ? '<p style="margin-top:14px"><button class="btn primary" data-x="report">🐞 Copy debug report</button></p><p class="note" style="margin-top:8px">Paste it to us and we\'ll fix the extractor for this page.</p>' : ''}</div>`}
       <div class="strip" id="strip" ${S.stripHidden || !rows.length ? 'hidden' : ''}><p>💡 Found the right people? <b>Aurora Studios</b> can like, follow and comment for you — hands-free, with human-like pacing. <a href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=results_strip" target="_blank" rel="noopener">3-day free trial →</a></p><button class="x" data-x="hidestrip" aria-label="Dismiss">✕</button></div>`;
     $('#q').oninput = (e) => { S.q = e.target.value; S.page = 1; clearTimeout(renderViewer._t); renderViewer._t = setTimeout(() => { renderViewer(); const q = $('#q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250); };
     v.onclick = (e) => { const b = e.target.closest('[data-x]'); if (b) act(b.dataset.x, run, rows); };
@@ -231,6 +232,7 @@
       await navigator.clipboard.writeText(Array.from(set).join('\n')); toast(`Copied ${set.size} email${set.size > 1 ? 's' : ''}`);
     }
     else if (a === 'media') mediaZip(run, rows, base);
+    else if (a === 'report') reportCopy(run.id);
     else if (a === 'more') { S.page++; renderViewer(); }
     else if (a === 'hidestrip') { S.stripHidden = true; $('#strip').hidden = true; }
     else if (a === 'delete') {
@@ -238,6 +240,7 @@
       await send({ type: 'deleteRun', runId: run.id }); S.active = null; await loadRuns(); await loadRows(); renderResults(); toast('Deleted');
     }
   }
+  async function reportCopy(runId) { toast((await AuroraReport.copy({ runId })) ? 'Debug report copied — paste it to us' : 'Could not copy — use Help → Save as .txt'); }
   function afterExport() { toast('Download started ✓'); }
 
   /* ---------- media ZIP ---------- */
@@ -290,6 +293,8 @@
   async function init() {
     theme(false);
     $('#themeBtn').onclick = () => theme(true);
+    $('#reportBtn').onclick = async () => toast((await AuroraReport.copy({})) ? 'Debug report copied — paste it to us' : 'Could not copy — use Help → Save as .txt');
+    $('#helpReport').onclick = $('#reportBtn').onclick; $('#helpSave').onclick = () => AuroraReport.save({});
     $('#nav').onclick = (e) => { const b = e.target.closest('button[data-view]'); if (b) setView(b.dataset.view); };
     renderStudios();
     await scanTabs(); await loadRuns(); await loadRows();

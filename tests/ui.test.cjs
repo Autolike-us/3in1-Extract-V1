@@ -9,13 +9,14 @@ const RUNS = [
   { id: 'r2', platform: 'tiktok', kind: 'comments', label: 'TikTok · Comments', opts: { limit: 200 }, status: 'error', error: 'Reload the tab', count: 0, startedAt: Date.now() - 7200e3 },
 ];
 const stub = ([runs, rows, tabs]) => {
-  const store = { runs, 'rows:r1': rows, 'rows:r2': [] };
+  const store = { runs, 'rows:r1': rows, 'rows:r2': [], debugLog: [{ t: Date.now(), l: 'warn', m: 'HTTP 429 /api/v1/friendships/<id>/followers/', r: 'r2', d: 'retry 1/2' }] };
+  window.__clip = ''; Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { window.__clip = t; } }, configurable: true });
   window.__sent = [];
   const page = { label: 'Group members', primary: 'group_members', kinds: [{ id: 'group_members', label: 'Group members' }, { id: 'posts', label: 'Posts' }] };
   window.chrome = {
     storage: { local: { get: async (k) => { const o = {}; [].concat(k || []).forEach((x) => { if (x in store) o[x] = store[x]; }); return o; }, set: async (o) => Object.assign(store, o), remove: async () => {} }, onChanged: { addListener() {} } },
     tabs: { query: async (q) => (q.active ? [{ id: 11, url: 'https://www.facebook.com/groups/9/members', title: 'Group' }] : tabs.filter((t) => q.url.some((m) => t.url.includes(m.split('*.')[1].split('/')[0])))), sendMessage: async () => ({ platform: 'facebook', name: 'Facebook', page }), create: async (o) => { window.__sent.push({ create: o.url }); }, reload() {}, onUpdated: { addListener() {} } },
-    runtime: { sendMessage: (m, cb) => { window.__sent.push(m); (cb || (() => {}))({ ok: true, runId: 'new' }); }, getURL: (x) => x },
+    runtime: { getManifest: () => ({ name: 'Aurora Extract', version: '9.9.9' }), sendMessage: (m, cb) => { window.__sent.push(m); (cb || (() => {}))({ ok: true, runId: 'new' }); }, getURL: (x) => x },
   };
   window.close = () => {};
 };
@@ -32,7 +33,7 @@ const stub = ([runs, rows, tabs]) => {
     await pg.waitForTimeout(500);
     return { pg, errs, ctx };
   };
-  const libs = ['core/zip.js', 'core/export.js', 'catalog.js', 'dashboard.js'];
+  const libs = ['core/zip.js', 'core/export.js', 'catalog.js', 'report.js', 'dashboard.js'];
 
   let { pg, errs } = await open('dashboard.html', libs);
   check('dashboard loads with no script errors', errs.length === 0);
@@ -68,6 +69,12 @@ const stub = ([runs, rows, tabs]) => {
   check('media ZIP bundles all 130 images + index.csv in tidy folders', /^131\n/.test(listing) && /facebook\/Member_0\/g0_1\.jpg/.test(listing));
   await pg.click('[data-x=hidestrip]'); check('upsell strip is dismissible', !(await pg.isVisible('#strip')));
 
+  await pg.click('.run[data-r=r2]'); await pg.waitForTimeout(200);
+  await pg.click('#viewer [data-x=report]'); await pg.waitForTimeout(200);
+  const rep = await pg.evaluate(() => window.__clip);
+  check('debug report: version, run error, log lines; no row data', /Aurora Extract v9\.9\.9/.test(rep) && /ERROR: Reload the tab/.test(rep) && /HTTP 429/.test(rep) && !/Member 1/.test(rep));
+  await pg.click('#reportBtn'); await pg.waitForTimeout(150);
+  check('sidebar "Copy debug report" copies a report covering recent runs', /RUN r1/.test(await pg.evaluate(() => window.__clip)) && /RUN r2/.test(await pg.evaluate(() => window.__clip)));
   await pg.click('nav [data-view=studios]');
   check('studios tab advertises all three paid extensions with tracked links', (await pg.$$('.studio')).length === 3 && (await pg.getAttribute('.studio a', 'href')).includes('utm_source=extract'));
   await pg.screenshot({ path: path.join(OUT, '4-studios.png') });
@@ -76,6 +83,7 @@ const stub = ([runs, rows, tabs]) => {
   // dark + mobile-ish width
   ({ pg, errs } = await open('dashboard.html', libs, { width: 760, height: 900 }, true));
   await pg.screenshot({ path: path.join(OUT, '5-dark-narrow.png'), fullPage: true });
+  check('default theme is LIGHT even when the OS prefers dark', await pg.evaluate(() => getComputedStyle(document.body).backgroundColor === 'rgb(246, 245, 251)'));
   check('dark/narrow layout has no horizontal overflow', await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 
   // popup

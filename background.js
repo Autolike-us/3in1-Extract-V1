@@ -8,6 +8,8 @@ let flushTimer = null;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const get = async (k, d) => { const o = await chrome.storage.local.get(k); return o[k] === undefined ? d : o[k]; };
 
+async function logBg(level, m, d) { const dl = await get('debugLog', []); dl.push({ t: Date.now(), l: level, m, d: d || '' }); await chrome.storage.local.set({ debugLog: dl.slice(-800) }); }
+
 async function updateRun(runId, patch) {
   const runs = await get('runs', []);
   const r = runs.find((x) => x.id === runId);
@@ -35,7 +37,7 @@ async function startRun({ tabId, kind, opts, label, platform }) {
   await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] });
   let res;
   try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); }
-  catch (_) { res = { ok: false, error: 'Could not reach the page. Reload the Facebook / Instagram / TikTok tab and try again.' }; }
+  catch (e) { await logBg('error', 'cannot reach tab ' + tabId, String(e)); res = { ok: false, error: 'Could not reach the page. Reload the Facebook / Instagram / TikTok tab and try again.' }; }
   if (!res || !res.ok) { await updateRun(run.id, { status: 'error', error: (res && res.error) || 'Failed to start', finishedAt: Date.now() }); return { ok: false, error: res && res.error }; }
   return { ok: true, runId: run.id };
 }
@@ -50,10 +52,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
   (async () => {
     switch (msg && msg.type) {
       case 'rows': { const b = buffers.get(msg.runId) || []; b.push(...msg.rows); buffers.set(msg.runId, b); scheduleFlush(); return send({}); }
+      case 'log': { const dl = await get('debugLog', []); dl.push({ ...msg.entry, r: msg.runId }); await chrome.storage.local.set({ debugLog: dl.slice(-800) }); return send({}); }
       case 'progress': await updateRun(msg.runId, { count: msg.count, note: msg.note || '' }); return send({});
       case 'done': {
         await flush();
-        await updateRun(msg.runId, { count: msg.count, status: msg.error ? 'error' : msg.stopped ? 'stopped' : 'done', error: msg.error, finishedAt: Date.now(), note: '' });
+        await updateRun(msg.runId, { count: msg.count, status: msg.error ? 'error' : msg.stopped ? 'stopped' : 'done', error: msg.error, finishedAt: Date.now(), note: '', snapshot: msg.snapshot || null });
         return send({});
       }
       case 'startRun': return send(await startRun(msg));
