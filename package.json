@@ -1,0 +1,11 @@
+{
+  "name": "aurora-extract",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node tests/core.test.cjs && node tests/extractors.test.cjs",
+    "test:ui": "node tests/ui.test.cjs",
+    "package": "node scripts/package.cjs",
+    "test:ext": "node tests/extension_smoke.cjs"
+  }
+}
