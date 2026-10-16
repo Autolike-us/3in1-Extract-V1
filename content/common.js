@@ -42,10 +42,10 @@
    * pull() returns the number of NEW rows it emitted. Stops at limit, when nothing new
    * arrives for `patience` rounds, or when ctx.stopped().
    */
-  A.scrollCollect = async function (ctx, pull, { container, patience = 5 } = {}) {
+  A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process } = {}) {
     let idle = 0;
     while (!ctx.stopped()) {
-      const added = pull();
+      const added = isAsync ? await process(pull()) : pull();
       if (ctx.count() >= ctx.limit) break;
       idle = added > 0 ? 0 : idle + 1;
       if (idle >= patience) break;
@@ -72,11 +72,46 @@
     return list.filter((m) => m && m.url && !seen.has(m.url) && seen.add(m.url));
   };
 
-  /** Fetch JSON with the page's own session (cookies) — same data the signed-in user can already see. */
-  A.getJSON = async (url, headers = {}) => {
-    const r = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json', ...headers } });
-    if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
-    return r.json();
+  /** Debug log hook — boot.js replaces this while a run is active. */
+  A.log = () => {};
+  const shortUrl = (u) => { try { const x = new URL(u, location.href); return x.pathname; } catch (_) { return String(u).slice(0, 80); } };
+
+  /** Fetch JSON with the page's own session (cookies) — same data the signed-in user can already see.
+   *  Retries rate limits (429/5xx) with back-off, logs every non-OK status, and throws an Error with .status. */
+  A.getJSON = async (url, headers = {}, { retries = 2, wait = 15000 } = {}) => {
+    for (let attempt = 0; ; attempt++) {
+      let r;
+      try { r = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json', ...headers } }); }
+      catch (e) { A.log('error', 'network error ' + shortUrl(url), String(e)); throw e; }
+      if (r.ok) {
+        const body = await r.text();
+        try { return JSON.parse(body.replace(/^for \(;;\);/, '')); }
+        catch (e) { A.log('error', 'bad JSON from ' + shortUrl(url), `content-type=${r.headers.get('content-type')} redirected=${r.redirected} len=${body.length} starts="${body.slice(0, 70).replace(/\s+/g, ' ')}"`); throw new Error('Unexpected response (not JSON) — are you logged in?'); }
+      }
+      const ra = Number(r.headers.get('retry-after')) * 1000;
+      A.log('warn', `HTTP ${r.status} ${shortUrl(url)}`, attempt < retries && (r.status === 429 || r.status >= 500) ? `retry ${attempt + 1}/${retries}` : '');
+      if ((r.status === 429 || r.status >= 500) && attempt < retries) { await A.sleep(ra > 0 ? Math.min(ra, 60000) : wait * (attempt + 1)); continue; }
+      const e = new Error(r.status === 429 ? 'Rate limited by the site (HTTP 429)' : 'HTTP ' + r.status); e.status = r.status; throw e;
+    }
+  };
+
+  /** Structure-only probe of the current page (no text, names or personal data) for debug reports. */
+  A.snapshot = () => {
+    const names = (sel, attr) => Array.from(new Set(A.qa(sel).map((e) => e.getAttribute(attr)))).slice(0, 40);
+    const count = (sel) => { try { return document.querySelectorAll(sel).length; } catch (_) { return -1; } };
+    return {
+      path: location.pathname.replace(/\d{6,}/g, '<id>').replace(/@[^/]+/, '@<user>').replace(/(\/(?:p|reel|tv)\/)[^/]+/, '$1<code>'),
+      title: document.title.slice(0, 60).replace(/\S+@\S+/g, '<email>'),
+      counts: {
+        'role=article': count('[role="article"]'), 'role=dialog': count('[role="dialog"]'), 'role=feed': count('[role="feed"]'), 'role=listitem': count('[role="listitem"]'),
+        'a[/p/]': count('a[href*="/p/"]'), 'a[/reel/]': count('a[href*="/reel/"]'), 'a[/video/]': count('a[href*="/video/"]'),
+        'a[marketplace/item]': count('a[href*="/marketplace/item/"]'), 'a[groups/user]': count('a[href*="/groups/"][href*="/user/"]'),
+        'img': count('img'), 'video': count('video'), 'h1': count('h1'), 'ld+json': count('script[type="application/ld+json"]'),
+      },
+      scriptIds: names('script[id]', 'id'), dataE2E: names('[data-e2e]', 'data-e2e'),
+      loggedOutHint: /log in|sign up|iniciar sesión|connexion/i.test((document.body.innerText || '').slice(0, 600)) && count('input[type="password"]') > 0,
+      scrollable: document.scrollingElement ? document.scrollingElement.scrollHeight : 0,
+    };
   };
 
   /** Pull the first JSON blob out of <script> tags whose id matches / text matches. */

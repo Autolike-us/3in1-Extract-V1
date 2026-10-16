@@ -5,7 +5,14 @@
   const A = globalThis.AuroraX;
   if (!A) return;
   const APP_ID = '936619743392459';
-  const H = { 'x-ig-app-id': APP_ID, 'x-requested-with': 'XMLHttpRequest' };
+  const cookie = (n) => (document.cookie.match(new RegExp('(?:^|; )' + n + '=([^;]*)')) || [])[1] || '';
+  const H = { 'x-ig-app-id': APP_ID, 'x-requested-with': 'XMLHttpRequest', 'x-asbd-id': '129477', 'x-ig-www-claim': (() => { try { return sessionStorage.getItem('www-claim-v2') || '0'; } catch (_) { return '0'; } })() };
+  const csrf = cookie('csrftoken'); if (csrf) H['x-csrftoken'] = csrf;
+
+  /* media addresses captured by ig-sniffer.js from Instagram's own page traffic */
+  const CAPTURED = {};
+  document.addEventListener('aurora-ig-media', (e) => { try { for (const m of JSON.parse(e.detail)) CAPTURED[m.code] = m.items; } catch (_) {} });
+  document.dispatchEvent(new CustomEvent('aurora-ig-replay'));
   const NOT_USER = /^(p|reel|reels|tv|explore|accounts|direct|stories|about|developers|legal|web|challenge|oauth|emails|nametag|lite)$/i;
 
   const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -75,11 +82,32 @@
 
   /* ---------- tasks ---------- */
   async function fetchProfile(username) {
-    const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H);
+    const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, { retries: 1, wait: 8000 });
     if (!j.data || !j.data.user) throw new Error('Profile not found or not visible to your account.');
     return j.data.user;
   }
-  async function profile(ctx) { ctx.emit(mapProfile(await fetchProfile(currentUser()))); }
+
+  /** Try the site's own API; if it fails (rate limit, login, changed endpoint) and nothing was saved yet, read the page instead. */
+  async function withFallback(ctx, what, api, dom) {
+    try { await api(); if (ctx.count() > 0 || ctx.stopped()) return; ctx.log('warn', what + ': API returned no rows — reading the page instead'); }
+    catch (e) {
+      if (ctx.count() > 0) { ctx.log('warn', what + ': stopped early', e.message); throw new Error(`Stopped after ${ctx.count()} rows — ${e.message}. Wait a few minutes before running again.`); }
+      ctx.log('warn', what + ': API failed (' + e.message + ') — reading the page instead');
+      ctx.progress('Site limit reached — reading the page instead…');
+    }
+    await dom();
+  }
+
+  const OGC = /([\d.,]+[KMB]?)\s+Followers?,\s+([\d.,]+[KMB]?)\s+Following,\s+([\d.,]+[KMB]?)\s+Posts?/i;
+  async function profileDom(ctx) {
+    const og = A.meta('og:description'), m = og.match(OGC), user = currentUser();
+    const bio = A.txt(A.q('header section h1 ~ div, header section > div > span')) || '';
+    const c = A.contacts(og + ' ' + bio + ' ' + A.txt(A.q('header')));
+    ctx.emit({ id: user, username: user, name: (A.meta('og:title').match(/^(.*?)\s*\(@/) || [])[1] || '', url: location.href.split('?')[0], bio,
+      followers: m ? A.parseCount(m[1]) : null, following: m ? A.parseCount(m[2]) : null, posts: m ? A.parseCount(m[3]) : null, email: c.emails[0] || '', phone: c.phones[0] || '',
+      website: (A.q('header a[href*="l.instagram.com"]') || {}).textContent || '', avatar: (A.q('header img') || {}).src || '' });
+  }
+  async function profile(ctx) { await withFallback(ctx, 'profile', async () => ctx.emit(mapProfile(await fetchProfile(currentUser()))), () => profileDom(ctx)); }
 
   async function paged(ctx, urlFn, pick, map, { startToken = '', tokenKey = 'next_max_id' } = {}) {
     let token = startToken;
@@ -94,44 +122,166 @@
       await ctx.pause();
     }
   }
+
+  const unesc = (t) => t.replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+  const fromItems = (items) => A.dedupeMedia([].concat(...items.map((x) => (x.v ? [{ type: 'video', url: x.v }] : x.i ? [{ type: 'image', url: x.i }] : []))));
+  const codeOf = (u) => (u.match(/\/(?:p|reel|tv)\/([^/?]+)/) || [])[1];
+
+  /** Real media for one post/reel. Tries, in order: what Instagram's own page already loaded, the media API,
+   *  the embed page, then the post page itself. Returns { media, caption, via }. */
+  async function enrichPost(url, ctx) {
+    const code = codeOf(url), isReel = /\/(reel|tv)\//.test(url);
+    const good = (m) => m.length && (!isReel || m.some((x) => x.type === 'video'));
+    if (CAPTURED[code]) { const m = fromItems(CAPTURED[code]); if (good(m)) return { media: m, via: 'page-data' }; }
+    try {
+      const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${shortcodeToId(code)}/info/`, H, { retries: 0 });
+      const it = j.items && j.items[0];
+      if (it) { const m = mediaOf(it); if (good(m)) return { media: m, caption: (it.caption && it.caption.text) || '', via: 'api' }; }
+    } catch (e) { ctx.log('warn', 'media api: ' + e.message); }
+    try {
+      const html = await (await fetch(`https://www.instagram.com/${isReel ? 'reel' : 'p'}/${code}/embed/captioned/`, { credentials: 'include' })).text();
+      const out = [];
+      for (const m of html.matchAll(/"video_url":"([^"]+)"/g)) out.push({ type: 'video', url: unesc(m[1]) });
+      for (const m of html.matchAll(/<video[^>]+src="([^"]+)"/g)) out.push({ type: 'video', url: unesc(m[1]) });
+      if (!out.length) { for (const m of html.matchAll(/"display_url":"([^"]+)"/g)) out.push({ type: 'image', url: unesc(m[1]) }); const im = html.match(/class="EmbeddedMediaImage"[^>]+src="([^"]+)"/); if (im) out.push({ type: 'image', url: unesc(im[1]) }); }
+      const m = A.dedupeMedia(out); if (good(m)) return { media: m, via: 'embed' };
+      ctx.log('warn', 'embed page had no ' + (isReel ? 'video' : 'media'), `len=${html.length}`);
+    } catch (e) { ctx.log('warn', 'embed: ' + e.message); }
+    const r = await fetch(url, { credentials: 'include' });
+    if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
+    const html = await r.text();
+    const out = [];
+    for (const m of html.matchAll(/"video_versions":\[\{[^\]]*?"url":"([^"]+)"/g)) out.push({ type: 'video', url: unesc(m[1]) });
+    const og = html.match(/property="og:video(?::secure_url)?" content="([^"]+)"/);
+    if (!out.length && og) out.push({ type: 'video', url: unesc(og[1]) });
+    if (!out.length) {
+      for (const m of html.matchAll(/"display_url":"([^"]+)"/g)) out.push({ type: 'image', url: unesc(m[1]) });
+      const oi = html.match(/property="og:image" content="([^"]+)"/);
+      if (!out.length && oi) out.push({ type: 'image', url: unesc(oi[1]) });
+    }
+    const cap = html.match(/property="og:title" content="([^"]*)"/);
+    return { media: A.dedupeMedia(out).slice(0, 12), caption: cap ? unesc(cap[1]) : '', via: 'page-html' };
+  }
+
+  async function gridDom(ctx, tag) {
+    const seen = new Set();
+    const wantMedia = ctx.opts.media !== false;
+    let fails = 0, noVideo = 0;
+    await A.scrollCollect(ctx, () => {
+      const fresh = [];
+      for (const a of A.qa('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]')) {
+        const url = A.abs(a.getAttribute('href')).split('?')[0];
+        if (seen.has(url)) continue; seen.add(url);
+        const img = A.q('img', a);
+        fresh.push({ id: url, url, ...(tag ? { hashtag: '#' + tag } : { author: currentUser() }), type: /\/(reel|tv)\//.test(url) ? 'reel' : 'post', caption: img ? img.alt : '', thumb: img ? img.src : '', media: img ? [{ type: 'image', url: img.src }] : [] });
+      }
+      return fresh;
+    }, { async: true, process: async (fresh) => {
+      let added = 0;
+      for (const row of fresh) {
+        if (ctx.stopped() || ctx.count() >= ctx.limit) break;
+        if (wantMedia && fails < 3) {
+          try {
+            const e = await enrichPost(row.url, ctx);
+            if (e.media.length) row.media = e.media;
+            if (e.caption && !row.caption) row.caption = e.caption;
+            if (row.type === 'reel' && !e.media.some((m) => m.type === 'video')) { row.videoMissing = true; noVideo++; ctx.log('warn', 'no video file found for a reel (tried page data, API, embed, page)'); }
+            else ctx.log('info', `media ok via ${e.via}`, e.media.map((m) => m.type).join(','));
+            fails = 0;
+          } catch (err) { fails++; ctx.log('warn', 'could not load post media: ' + err.message, fails >= 3 ? 'giving up on media for this run — thumbnails only' : ''); }
+          await ctx.pause();
+        }
+        added += ctx.emit(row);
+        ctx.progress();
+      }
+      return added;
+    } });
+    if (noVideo && ctx.setWarning) ctx.setWarning(`${noVideo} reel${noVideo > 1 ? 's' : ''} saved as a picture only — Instagram didn't expose the video file. Reload the profile, scroll down so the reels load, then run again (rows marked videoMissing).`);
+  }
   async function posts(ctx) {
     const user = currentUser();
-    await paged(ctx, (t) => `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(user)}/username/?count=12${t ? '&max_id=' + t : ''}`, (j) => j.items, mapPost);
+    await withFallback(ctx, 'posts', () => paged(ctx, (t) => `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(user)}/username/?count=12${t ? '&max_id=' + t : ''}`, (j) => j.items, mapPost), () => gridDom(ctx));
   }
-  async function userId() { return (await fetchProfile(currentUser())).id; }
-  async function followers(ctx) { const id = await userId(); await paged(ctx, (t) => `https://www.instagram.com/api/v1/friendships/${id}/followers/?count=50${t ? '&max_id=' + t : ''}`, (j) => j.users, mapUserBrief); }
-  async function following(ctx) { const id = await userId(); await paged(ctx, (t) => `https://www.instagram.com/api/v1/friendships/${id}/following/?count=50${t ? '&max_id=' + t : ''}`, (j) => j.users, mapUserBrief); }
+
+  function idFromPage() {
+    for (const sc of A.qa('script')) {
+      const t = sc.textContent || '';
+      if (t.length < 100) continue;
+      const m = t.match(/"(?:profile_id|target_id)":"(\d{5,})"/);
+      if (m) return m[1];
+    }
+    return null;
+  }
+  async function userId() { return idFromPage() || (await fetchProfile(currentUser())).id; }
+  const RESERVED_HANDLE = /^(p|reel|reels|tv|explore|accounts|direct|stories|about|legal|web)$/i;
+  function findListLink(which) {
+    const re = new RegExp('/' + which + '/?$');
+    return A.qa('a[href]').find((a) => re.test(a.getAttribute('href') || '')) || A.qa('header a, header li, main header *').find((e) => new RegExp('\\b' + which + '\\b', 'i').test(A.txt(e)) && A.txt(e).length < 30 && (e.tagName === 'A' || e.closest('a')));
+  }
+  async function listDom(ctx, which) {
+    let dlg = A.q('[role="dialog"]');
+    if (!dlg) {
+      const link = findListLink(which);
+      ctx.log('info', `${which}: link ${link ? 'found' : 'NOT found'}`, link ? '' : 'follow-ish hrefs: ' + A.qa('a[href*="follow"]').slice(0, 8).map((a) => a.getAttribute('href').replace(/^\/[^/]+/, '/<user>')).join(' , '));
+      if (link) { (link.closest('a') || link).click(); for (let i = 0; i < 20 && !dlg; i++) { await A.sleep(300); dlg = A.q('[role="dialog"]'); } }
+    }
+    if (!dlg) throw new Error(`Couldn't open the ${which} list. Click "${which}" on the profile yourself so the list pops up, then press Start again.`);
+    ctx.log('info', `${which}: dialog open`);
+    const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
+    const seen = new Set();
+    await A.scrollCollect(ctx, () => {
+      let added = 0;
+      for (const a of A.qa('a[href^="/"]', dlg)) {
+        const m = (a.getAttribute('href') || '').match(/^\/([\w.]+)\/?$/);
+        if (!m || RESERVED_HANDLE.test(m[1]) || seen.has(m[1])) continue; seen.add(m[1]);
+        const row = a.parentElement.parentElement.parentElement || a;
+        const lines = (row.innerText || '').split('\n').map((x) => x.trim()).filter((x) => x && x !== m[1] && !/^(follow|following|remove|verified|message)$/i.test(x));
+        added += ctx.emit({ id: m[1], username: m[1], name: lines[0] || '', profileUrl: 'https://www.instagram.com/' + m[1] + '/', avatar: (A.q('img', row) || {}).src || '' });
+      }
+      ctx.progress(); return added;
+    }, { container: box, patience: 6 });
+  }
+  const listTask = (which) => async (ctx) => {
+    try { await listDom(ctx, which); if (ctx.count() > 0 || ctx.stopped()) return; ctx.log('warn', which + ': dialog gave no rows — trying the API'); }
+    catch (e) { if (ctx.count() > 0) throw e; ctx.log('warn', which + ': ' + e.message + ' — trying the API'); }
+    try { const id = await userId(); await paged(ctx, (t) => `https://www.instagram.com/api/v1/friendships/${id}/${which}/?count=50${t ? '&max_id=' + t : ''}`, (j) => j.users, mapUserBrief); }
+    catch (e) { throw new Error(`Couldn't read the ${which} list (${e.message}). Click "${which}" on the profile so the list pops up, then press Start again.`); }
+  };
 
   function mediaIdHere() { const m = location.pathname.match(/\/(?:p|reel|tv)\/([^/]+)/); return m ? { code: m[1], id: shortcodeToId(m[1]) } : null; }
   async function post(ctx) {
     const m = mediaIdHere();
-    const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${m.id}/info/`, H);
-    ctx.emit(mapPost(j.items[0]));
+    await withFallback(ctx, 'post', async () => { const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${m.id}/info/`, H); ctx.emit(mapPost(j.items[0])); }, async () => {
+      const img = A.qa('article img').find((i) => i.width > 200);
+      ctx.emit({ id: m.code, url: location.href.split('?')[0], caption: A.meta('og:title'), media: [A.meta('og:video') && { type: 'video', url: A.meta('og:video') }, A.meta('og:image') && { type: 'image', url: A.meta('og:image') }, img && { type: 'image', url: img.src }].filter(Boolean) });
+    });
+  }
+  async function commentsDom(ctx) {
+    const root = A.q('article') || A.q('main') || document;
+    const seen = new Set();
+    await A.scrollCollect(ctx, () => {
+      for (const b of A.qa('button, [role="button"]', root)) if (/view (all )?\d* ?(more )?(replies|comments)|load more comments/i.test(A.txt(b))) { try { b.click(); } catch (_) {} }
+      let added = 0;
+      for (const li of A.qa('ul li, ul > div', root)) {
+        const au = A.q('a[href^="/"][role="link"], h3 a, a[href^="/"]', li); const user = au ? (au.getAttribute('href').match(/^\/([\w.]+)\/?$/) || [])[1] : '';
+        const text = A.qa('span[dir="auto"], span', li).map(A.txt).filter((t) => t && t !== user).sort((x, y) => y.length - x.length)[0] || '';
+        if (!user || !text || seen.has(user + text)) continue; seen.add(user + text);
+        added += ctx.emit({ id: user + ':' + text.slice(0, 40), author: user, text, postUrl: location.href.split('?')[0] });
+      }
+      ctx.progress(); return added;
+    }, { patience: 6 });
   }
   async function comments(ctx) {
     const m = mediaIdHere();
     const url = `https://www.instagram.com/${location.pathname.split('/')[1]}/${m.code}/`;
-    await paged(ctx, (t) => `https://www.instagram.com/api/v1/media/${m.id}/comments/?can_support_threading=true&permalink_enabled=false${t ? '&min_id=' + encodeURIComponent(t) : ''}`, (j) => j.comments, (c) => mapComment(c, url), { tokenKey: 'next_min_id' });
+    await withFallback(ctx, 'comments', () => paged(ctx, (t) => `https://www.instagram.com/api/v1/media/${m.id}/comments/?can_support_threading=true&permalink_enabled=false${t ? '&min_id=' + encodeURIComponent(t) : ''}`, (j) => j.comments, (c) => mapComment(c, url), { tokenKey: 'next_min_id' }), () => commentsDom(ctx));
   }
-  async function hashtag(ctx) {
-    const tag = decodeURIComponent(location.pathname.split('/')[3] || '');
-    const seen = new Set();
-    await A.scrollCollect(ctx, () => {
-      let added = 0;
-      for (const a of A.qa('a[href*="/p/"], a[href*="/reel/"]')) {
-        const url = A.abs(a.getAttribute('href')).split('?')[0];
-        if (seen.has(url)) continue; seen.add(url);
-        const img = A.q('img', a);
-        added += ctx.emit({ id: url, url, hashtag: '#' + tag, caption: img ? img.alt : '', media: img ? [{ type: 'image', url: img.src }] : [] });
-      }
-      ctx.progress(); return added;
-    });
-  }
+  async function hashtag(ctx) { await gridDom(ctx, decodeURIComponent(location.pathname.split('/')[3] || '')); }
 
   A.register('instagram', {
     name: 'Instagram', hosts: /(^|\.)instagram\.com$/, detect,
     kinds: ['profile', 'posts', 'followers', 'following', 'comments', 'post', 'hashtag'],
-    tasks: { profile, posts, followers, following, comments, post, hashtag },
+    tasks: { profile, posts, followers: listTask('followers'), following: listTask('following'), comments, post, hashtag },
     _test: { mapPost, mapProfile, mapComment, mapUserBrief, shortcodeToId, detect },
   });
 })();

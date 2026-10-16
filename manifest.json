@@ -1,9 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Aurora Extract — Facebook, Instagram & TikTok data",
-  "version": "0.1.0",
+  "name": "Aurora Extract \u2014 Facebook, Instagram & TikTok data",
+  "version": "0.1.3",
   "description": "Free 3-in-1 extractor: collect public profile, group, Marketplace, post, comment and follower data from Facebook, Instagram and TikTok. Export to CSV, Excel or JSON and download media.",
-  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting", "downloads", "declarativeNetRequest"],
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "scripting",
+    "downloads",
+    "declarativeNetRequest"
+  ],
   "host_permissions": [
     "https://*.facebook.com/*",
     "https://*.instagram.com/*",
@@ -14,17 +21,49 @@
     "https://*.tiktokcdn-us.com/*",
     "https://*.tiktokv.com/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "Aurora Extract",
     "default_popup": "popup.html",
-    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
-  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "content_scripts": [
     {
-      "matches": ["https://*.facebook.com/*", "https://*.instagram.com/*", "https://*.tiktok.com/*"],
-      "js": ["content/common.js", "content/facebook.js", "content/instagram.js", "content/tiktok.js", "content/boot.js"],
+      "matches": [
+        "https://*.instagram.com/*"
+      ],
+      "js": [
+        "content/ig-sniffer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.facebook.com/*",
+        "https://*.instagram.com/*",
+        "https://*.tiktok.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/facebook.js",
+        "content/instagram.js",
+        "content/tiktok.js",
+        "content/boot.js"
+      ],
       "run_at": "document_idle"
     }
   ]
