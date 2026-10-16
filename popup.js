@@ -26,12 +26,12 @@
     const page = d.page;
     if (!page || !page.kinds.length) { box.innerHTML = `${badge}<h2>Pick a page to extract</h2><p>Open a profile, group, post, hashtag or Marketplace page, then click again.</p><button class="btn full" id="go">Open dashboard</button>`; $('#go').onclick = () => open('#extract'); return; }
     box.innerHTML = `${badge}<h2>${h(page.label)}</h2><p>Detected — choose what to collect:</p>
-      <select id="kind">${page.kinds.map((k) => `<option value="${k.id}" ${k.id === page.primary ? 'selected' : ''}>${h(k.label)}</option>`).join('')}</select>
+      <select id="kind">${page.kinds.map((k) => `<option value="${k.id}" ${k.id === page.primary ? 'selected' : ''}>${h(k.label)}${k.goto ? ' ↗' : ''}</option>`).join('')}</select>
       <button class="btn primary full" id="start">▶ Start extracting</button><p style="margin-top:8px;font-size:11px">Up to 200 items, normal speed. Change in the dashboard.</p>`;
     $('#start').onclick = async () => {
       const kind = $('#kind').value, kl = page.kinds.find((k) => k.id === kind).label;
       $('#start').disabled = true;
-      const r = await send({ type: 'startRun', tabId: tab.id, kind, platform, label: `${p.name} · ${kl}`, opts: { limit: 200, delayMs: 1200, media: true } });
+      const r = await send({ type: 'startRun', tabId: tab.id, kind, goto: (page.kinds.find((k) => k.id === kind) || {}).goto, platform, label: `${p.name} · ${kl}`, opts: { limit: 200, delayMs: 1200, media: true } });
       if (r.ok) open('#extract'); else { $('#start').disabled = false; $('#start').textContent = r.error || 'Could not start'; }
     };
   }

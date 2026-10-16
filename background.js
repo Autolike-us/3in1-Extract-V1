@@ -30,13 +30,28 @@ async function flush() {
 }
 const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS); };
 
-async function startRun({ tabId, kind, opts, label, platform }) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function navigate(tabId, url) {
+  const tab = await chrome.tabs.get(tabId);
+  if ((tab.url || '').split('#')[0] === url.split('#')[0]) return;
+  await new Promise((res) => {
+    const done = () => { clearTimeout(t); chrome.tabs.onUpdated.removeListener(l); res(); };
+    const l = (id, info) => { if (id === tabId && info.status === 'complete') done(); };
+    const t = setTimeout(done, 25000);
+    chrome.tabs.onUpdated.addListener(l);
+    chrome.tabs.update(tabId, { url });
+  });
+  await sleep(2500); // let the single-page app render its first screen
+}
+
+async function startRun({ tabId, kind, opts, label, platform, goto }) {
   const run = { id: uid(), platform, kind, label: label || kind, opts, tabId, status: 'running', count: 0, note: '', startedAt: Date.now(), finishedAt: null, error: null };
   const runs = await get('runs', []);
   runs.unshift(run);
   await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] });
   let res;
-  try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); }
+  if (goto) { await logBg('info', 'navigating tab to start ' + kind, goto.replace(/\d{6,}/g, '<id>')); await updateRun(run.id, { note: 'Opening the right page…' }); try { await navigate(tabId, goto); } catch (e) { await logBg('error', 'navigation failed', String(e)); } }
+  try { for (let i = 0; ; i++) { try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); break; } catch (e) { if (i >= 8) throw e; await sleep(1000); } } }
   catch (e) { await logBg('error', 'cannot reach tab ' + tabId, String(e)); res = { ok: false, error: 'Could not reach the page. Reload the Facebook / Instagram / TikTok tab and try again.' }; }
   if (!res || !res.ok) { await updateRun(run.id, { status: 'error', error: (res && res.error) || 'Failed to start', finishedAt: Date.now() }); return { ok: false, error: res && res.error }; }
   return { ok: true, runId: run.id };

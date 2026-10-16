@@ -46,7 +46,7 @@
         if (fresh.length) chrome.runtime.sendMessage({ type: 'rows', runId, rows: fresh });
         return fresh.length;
       },
-      progress: (note) => chrome.runtime.sendMessage({ type: 'progress', runId, count: state.n, note: note || '' }),
+      progress: (note, n) => chrome.runtime.sendMessage({ type: 'progress', runId, count: n == null ? state.n : n, note: note || '' }),
     };
     (async () => {
       let error = null;

@@ -21,7 +21,7 @@
   function detect(u) {
     const seg = u.pathname.split('/').filter(Boolean);
     if (seg[0] === 'explore' && seg[1] === 'tags') return { label: '#' + decodeURIComponent(seg[2] || ''), primary: 'hashtag', kinds: [{ id: 'hashtag', label: 'Hashtag posts' }] };
-    if (['p', 'reel', 'tv'].includes(seg[0]) && seg[1]) return { label: 'Post / reel', primary: 'comments', kinds: [{ id: 'comments', label: 'Comments' }, { id: 'post', label: 'This post (with media)' }] };
+    if (['p', 'reel', 'tv'].includes(seg[0]) && seg[1]) return { label: 'Post / reel', primary: 'comments', kinds: [{ id: 'comments', label: 'All comments' }, { id: 'commenters', label: 'People who commented' }, { id: 'likers', label: 'People who liked' }, { id: 'post', label: 'This post (with media)' }] };
     if (seg[0] && !NOT_USER.test(seg[0])) {
       const k = [{ id: 'profile', label: 'Profile & business contact' }, { id: 'posts', label: 'Posts & reels' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }];
       return { label: '@' + seg[0], primary: 'profile', kinds: k };
@@ -77,7 +77,7 @@
   }
   function safeAddr(j) { try { const a = typeof j === 'string' ? JSON.parse(j) : j; return [a.street_address, a.city_name, a.zip_code].filter(Boolean).join(', '); } catch (_) { return ''; } }
   function mapComment(c, postUrl) {
-    return { id: c.pk || c.id, author: c.user && c.user.username, authorName: c.user && c.user.full_name, text: c.text, likes: c.comment_like_count, replies: c.child_comment_count, postedAt: c.created_at ? new Date(c.created_at * 1000).toISOString() : '', postUrl };
+    return { id: c.pk || c.id, author: c.user && c.user.username, authorName: c.user && c.user.full_name, authorUrl: c.user && c.user.username ? 'https://www.instagram.com/' + c.user.username + '/' : '', text: c.text, likes: c.comment_like_count, replies: c.child_comment_count, postedAt: c.created_at ? new Date(c.created_at * 1000).toISOString() : '', postUrl };
   }
 
   /* ---------- tasks ---------- */
@@ -223,12 +223,12 @@
   async function listDom(ctx, which) {
     let dlg = A.q('[role="dialog"]');
     if (!dlg) {
-      const link = findListLink(which);
+      const link = which === 'likers' ? (A.qa('a[href$="/liked_by/"]')[0] || A.qa('a, span, button').find((e) => /^[\d.,KkM]+ likes?$|^liked by/i.test(A.txt(e)) && A.txt(e).length < 40)) : findListLink(which);
       ctx.log('info', `${which}: link ${link ? 'found' : 'NOT found'}`, link ? '' : 'follow-ish hrefs: ' + A.qa('a[href*="follow"]').slice(0, 8).map((a) => a.getAttribute('href').replace(/^\/[^/]+/, '/<user>')).join(' , '));
       if (link) { (link.closest('a') || link).click(); for (let i = 0; i < 20 && !dlg; i++) { await A.sleep(300); dlg = A.q('[role="dialog"]'); } }
     }
     if (!dlg) throw new Error(`Couldn't open the ${which} list. Click "${which}" on the profile yourself so the list pops up, then press Start again.`);
-    if (!new RegExp(which, 'i').test((dlg.innerText || '').slice(0, 200))) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
+    if (!new RegExp(which === 'likers' ? 'likes' : which, 'i').test((dlg.innerText || '').slice(0, 200))) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
     ctx.log('info', `${which}: dialog open`);
     const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
     const seen = new Set();
@@ -279,12 +279,17 @@
     const url = `https://www.instagram.com/${location.pathname.split('/')[1]}/${m.code}/`;
     await withFallback(ctx, 'comments', () => paged(ctx, (t) => `https://www.instagram.com/api/v1/media/${m.id}/comments/?can_support_threading=true&permalink_enabled=false${t ? '&min_id=' + encodeURIComponent(t) : ''}`, (j) => j.comments, (c) => mapComment(c, url), { tokenKey: 'next_min_id' }), () => commentsDom(ctx));
   }
+  async function likers(ctx) {
+    const m = mediaIdHere();
+    await withFallback(ctx, 'likers', async () => { const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${m.id}/likers/`, H, { retries: 1, wait: 8000 }); ctx.emit((j.users || []).map(mapUserBrief)); }, () => listDom(ctx, 'likers'));
+  }
+  async function commenters(ctx) { await A.commenters(ctx, comments); }
   async function hashtag(ctx) { await gridDom(ctx, decodeURIComponent(location.pathname.split('/')[3] || '')); }
 
   A.register('instagram', {
     name: 'Instagram', hosts: /(^|\.)instagram\.com$/, detect,
-    kinds: ['profile', 'posts', 'followers', 'following', 'comments', 'post', 'hashtag'],
-    tasks: { profile, posts, followers: listTask('followers'), following: listTask('following'), comments, post, hashtag },
+    kinds: ['profile', 'posts', 'followers', 'following', 'comments', 'commenters', 'likers', 'post', 'hashtag'],
+    tasks: { profile, posts, followers: listTask('followers'), following: listTask('following'), comments, commenters, likers, post, hashtag },
     _test: { mapPost, mapProfile, mapComment, mapUserBrief, shortcodeToId, detect },
   });
 })();

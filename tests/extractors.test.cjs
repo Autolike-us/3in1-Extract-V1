@@ -159,6 +159,49 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const wrongDlg = await pg.evaluate(async () => { const ctx = { opts: {}, limit: 5, stopped: () => false, count: () => 0, pause: () => Promise.resolve(), log() {}, progress() {}, emit() {} }; window.fetch = async () => { throw new Error('offline'); }; try { await AuroraX.platforms.instagram.tasks.followers(ctx); return 'no error'; } catch (e) { return e.message; } });
   check('IG followers: a different pop-up is never scraped as the list', /Couldn't read the followers list/.test(wrongDlg));
 
+  // ---- new capabilities: detection, navigation shortcuts, people lists, commenters, reactors, group info
+  await load('https://www.facebook.com/groups/9', '', ...F, 'content/facebook.js');
+  const dets = await pg.evaluate(() => { const d = (u) => AuroraX.platforms.facebook.detect(new URL(u)); return { feed: d('https://www.facebook.com/groups/9/'), prof: d('https://www.facebook.com/acme.cafe'), pid: d('https://www.facebook.com/profile.php?id=55'), fr: d('https://www.facebook.com/acme.cafe/friends'), post: d('https://www.facebook.com/acme/posts/123'), mem: d('https://www.facebook.com/groups/9/members') }; });
+  const ids = (d) => d.kinds.map((k) => k.id).join();
+  check('FB group feed offers Group members (↗ opens the Members tab) + Group info + posts', ids(dets.feed) === 'posts,group_members,group_info,comments' && dets.feed.kinds[1].goto === 'https://www.facebook.com/groups/9/members');
+  check('FB profile offers friends / followers / following lists with goto links', ids(dets.prof) === 'page_info,posts,people_friends,people_followers,people_following' && dets.prof.kinds[3].goto === 'https://www.facebook.com/acme.cafe/followers');
+  check('FB profile.php?id= builds sk= links', dets.pid.kinds.find((k) => k.id === 'people_friends').goto === 'https://www.facebook.com/profile.php?id=55&sk=friends');
+  check('FB friends page → people list; post page → comments, commenters, reactors', dets.fr.primary === 'people' && ids(dets.post) === 'comments,commenters,reactors,posts' && dets.mem.primary === 'group_members');
+
+  await load('https://www.facebook.com/acme.cafe/friends', `<div role="main"><a href="https://www.facebook.com/acme.cafe/photos">Photos</a><a href="https://www.facebook.com/acme.cafe/friends">Friends</a>
+    <div role="listitem"><a href="https://www.facebook.com/ana.silva"><img src="https://scontent.fbcdn.net/a.jpg"></a><a href="https://www.facebook.com/ana.silva">Ana Silva</a><div>Lives in Austin</div><a href="#">Add friend</a></div>
+    <div role="listitem"><a href="https://www.facebook.com/profile.php?id=777">Li Wei</a></div></div><div><a href="https://www.facebook.com/sidebar.person">Sidebar Person</a></div>`, ...F, 'content/facebook.js');
+  const ppl = await run('facebook', 'people');
+  check('FB people list: names + profile links, no tabs/buttons/sidebar', ppl.length === 2 && ppl[0].name === 'Ana Silva' && ppl[0].profileUrl === 'https://www.facebook.com/ana.silva' && /Austin/.test(ppl[0].about) && ppl[1].profileUrl.endsWith('id=777') && ppl[0].list === 'friends');
+
+  await load('https://www.facebook.com/acme/posts/123', `<div role="main"><span role="button" aria-label="See who reacted to this" id="rx">12</span></div><div id="host"></div>`, ...F, 'content/facebook.js');
+  const rxn = await pg.evaluate(async () => {
+    AuroraX.sleep = () => new Promise((r) => setTimeout(r, 5));
+    document.getElementById('rx').addEventListener('click', () => { document.getElementById('host').innerHTML = '<div role="dialog"><div style="overflow-y:auto;height:80px"><div role="listitem"><a href="https://www.facebook.com/p.one">Pat One</a></div><div role="listitem"><a href="https://www.facebook.com/p.two">Pat Two</a></div></div></div>'; });
+    const rows = []; const ctx = { opts: {}, limit: 20, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.facebook.tasks.reactors(ctx); return rows;
+  });
+  check('FB reactors: opens the reactions dialog and lists the people', rxn.length === 2 && rxn[0].name === 'Pat One' && rxn[0].list === 'reactions');
+
+  await load('https://www.facebook.com/groups/9', `<div role="main"><h1>Austin Bikers</h1><div>Private group · 12,345 members</div></div><meta property="og:description" content="For riders">`, ...F, 'content/facebook.js');
+  const gi = (await run('facebook', 'group_info'))[0];
+  check('FB group info: name, member count, privacy', gi.name === 'Austin Bikers' && gi.members === 12345 && /Private group/i.test(gi.privacy));
+
+  await load('https://www.tiktok.com/@chef/video/99', TT_COMMENTS + '<div class="CommentItem"><span data-e2e="comment-username-1">fan1</span><p data-e2e="comment-level-1">Second from fan1</p></div>', ...F, 'content/tiktok.js');
+  const cm = await run('tiktok', 'commenters');
+  check('TikTok commenters: one row per person with comment count, likes, sample (sorted)', cm.length === 2 && cm[0].username === 'fan1' && cm[0].comments === 2 && cm[0].likesOnComments === 1200 && /Love it/.test(cm[0].sample) && cm[1].comments === 1);
+
+  await load('https://www.instagram.com/p/ABC/', '', ...F, 'content/instagram.js');
+  const lk = await pg.evaluate(async () => {
+    window.fetch = async (u) => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => JSON.stringify(/likers/.test(u) ? { users: [{ pk: '1', username: 'u1', full_name: 'U One' }, { pk: '2', username: 'u2', is_verified: true }] } : { comments: [{ pk: 'c1', text: 'a', user: { username: 'zed', full_name: 'Zed' } }, { pk: 'c2', text: 'b', user: { username: 'zed' } }, { pk: 'c3', text: 'c', user: { username: 'amy' } }] }) });
+    const mk = () => { const rows = []; return { rows, ctx: { opts: {}, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } } }; };
+    const a = mk(); await AuroraX.platforms.instagram.tasks.likers(a.ctx);
+    const b = mk(); await AuroraX.platforms.instagram.tasks.commenters(b.ctx);
+    return { likers: a.rows, commenters: b.rows };
+  });
+  check('IG likers via API: users with profile links', lk.likers.length === 2 && lk.likers[1].verified === true && lk.likers[0].profileUrl.endsWith('/u1/'));
+  check('IG commenters: aggregated per user with profile link', lk.commenters.length === 2 && lk.commenters[0].username === 'zed' && lk.commenters[0].comments === 2 && lk.commenters[0].profileUrl === 'https://www.instagram.com/zed/');
+
   // ---- instagram: API failure → page-reading fallback, reels resolve to real video files
   await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/thumb1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/thumb2.jpg"></a>`, ...F, 'content/instagram.js');
   const fb = await pg.evaluate(async () => {

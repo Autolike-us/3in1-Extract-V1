@@ -8,7 +8,7 @@
   function detect(u) {
     const seg = u.pathname.split('/').filter(Boolean);
     if (seg[0] === 'tag' && seg[1]) return { label: '#' + decodeURIComponent(seg[1]), primary: 'hashtag', kinds: [{ id: 'hashtag', label: 'Hashtag videos' }] };
-    if (seg[0] && seg[0].startsWith('@') && seg[1] === 'video') return { label: 'Video', primary: 'comments', kinds: [{ id: 'comments', label: 'Comments' }, { id: 'video', label: 'This video (with download)' }] };
+    if (seg[0] && seg[0].startsWith('@') && seg[1] === 'video') return { label: 'Video', primary: 'comments', kinds: [{ id: 'comments', label: 'All comments' }, { id: 'commenters', label: 'People who commented' }, { id: 'video', label: 'This video (with download)' }] };
     if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos (with files)' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }] };
     if (seg[0] === 'search' || seg[0] === 'explore' || seg[0] === 'discover') return { label: 'Search / discover', primary: 'videos', kinds: [{ id: 'videos', label: 'Videos on screen' }] };
     return { label: 'TikTok', primary: null, kinds: [] };
@@ -163,11 +163,13 @@
         if (!text || seen.has(key)) continue; seen.add(key);
         const when = A.txt(A.q('[data-e2e^="comment-time"]', box));
         const likes = A.parseCount(A.txt(A.q('[data-e2e^="comment-like-count"]', box)));
-        added += ctx.emit({ id: key, author, text, likes, postedAt: when, reply: el.getAttribute('data-e2e') === 'comment-level-2', postUrl: url });
+        const ah = A.q('a[href^="/@"]', box); added += ctx.emit({ id: key, author, authorUrl: ah ? A.abs(ah.getAttribute('href')).split('?')[0] : '', text, likes, postedAt: when, reply: el.getAttribute('data-e2e') === 'comment-level-2', postUrl: url });
       }
       ctx.progress(); return added;
     }, { patience: 6 });
   }
+
+  async function commenters(ctx) { await A.commenters(ctx, comments); }
 
   /** Followers / following: ONLY rows inside the profile's list popup. */
   async function followList(ctx, which) {
@@ -201,8 +203,8 @@
 
   A.register('tiktok', {
     name: 'TikTok', hosts: /(^|\.)tiktok\.com$/, detect,
-    kinds: ['profile', 'videos', 'video', 'comments', 'followers', 'following', 'hashtag'],
-    tasks: { profile, videos, video, comments, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos },
+    kinds: ['profile', 'videos', 'video', 'comments', 'commenters', 'followers', 'following', 'hashtag'],
+    tasks: { profile, videos, video, comments, commenters, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos },
     _test: { mapUser, mapVideo, detect },
   });
 })();

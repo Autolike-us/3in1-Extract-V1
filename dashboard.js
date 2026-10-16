@@ -19,7 +19,7 @@
     S.view = v;
     for (const s of document.querySelectorAll('.view')) s.hidden = s.id !== 'view-' + v;
     for (const b of document.querySelectorAll('nav button')) b.classList.toggle('on', b.dataset.view === v);
-    if (v === 'results') renderResults();
+    if (v === 'results') { if (!S.userPicked && S.runs[0]) S.active = S.runs[0].id; loadRows().then(renderResults); }
     try { history.replaceState(null, '', '#' + v); } catch (_) {}
   }
   function theme(toggle) {
@@ -45,7 +45,7 @@
       </button>`).join('');
     $('#platforms').onclick = (e) => { const b = e.target.closest('.plat'); if (!b) return; S.platform = b.dataset.p; S.tabId = null; S.desc = null; pickDefaultTab(); render(); };
     const p = C.platforms[S.platform];
-    $('#tiles').innerHTML = p.tiles.map((t) => `<div class="tile"><span class="e">${t[0]}</span><b>${h(t[1])}</b><p>${h(t[2])}</p></div>`).join('');
+    $('#tiles').innerHTML = p.tiles.map((t) => `<div class="tile"><span class="e">${t[0]}</span><b>${h(t[1])}</b><p>${h(t[2])}</p>${t[3] ? `<small class="where">📍 ${h(t[3])}</small>` : ''}</div>`).join('');
   }
 
   /* ---------- step 2: tabs ---------- */
@@ -106,7 +106,7 @@
     host.innerHTML = `
       <div class="step"><span>3</span> What should we collect from “${h(page.label)}”?</div>
       <div class="card">
-        <div class="chips" style="margin-top:0" id="kinds">${page.kinds.map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}">${h(k.label)}</button>`).join('')}</div>
+        <div class="chips" style="margin-top:0" id="kinds">${page.kinds.map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}" ${k.goto ? 'title="We\'ll open the right page in this tab for you"' : ''}>${h(k.label)}${k.goto ? ' <small>↗</small>' : ''}</button>`).join('')}</div>
         <div class="opts">
           <div><label for="oLimit">How many items (max)</label><input id="oLimit" type="number" min="1" max="50000" value="${S.opts.limit}"><div class="sub">We stop earlier if the page runs out.</div></div>
           <div><label>Speed</label><div class="seg" id="oSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div><div class="sub">Gentle is the kindest to your account.</div></div>
@@ -124,7 +124,8 @@
     const page = S.desc.page, kind = S.kind || page.primary;
     const kl = (page.kinds.find((k) => k.id === kind) || {}).label || kind;
     $('#goBtn').disabled = true;
-    const res = await send({ type: 'startRun', tabId: S.tabId, kind, platform: S.platform, label: `${C.platforms[S.platform].name} · ${kl}`, opts: { limit: S.opts.limit, delayMs: SPEED[S.opts.speed], media: S.opts.media } });
+    const kobj = page.kinds.find((k) => k.id === kind) || {};
+    const res = await send({ type: 'startRun', tabId: S.tabId, kind, goto: kobj.goto, platform: S.platform, label: `${C.platforms[S.platform].name} · ${kl}`, opts: { limit: S.opts.limit, delayMs: SPEED[S.opts.speed], media: S.opts.media } });
     if (!res.ok) { toast(res.error || 'Could not start'); $('#goBtn').disabled = false; }
     else toast('Extraction started — you can keep browsing other tabs');
     await loadRuns(); renderLive();
@@ -151,7 +152,7 @@
       if (a.dataset.a === 'stop') await send({ type: 'stopRun', runId: r.id });
       if (a.dataset.a === 'pause') await send({ type: 'pauseRun', runId: r.id, on: r.status !== 'paused' });
       if (a.dataset.a === 'report') reportCopy(r.id);
-      if (a.dataset.a === 'view') { S.active = r.id; await loadRows(); setView('results'); }
+      if (a.dataset.a === 'view') { S.active = r.id; S.userPicked = true; await loadRows(); setView('results'); }
     };
   }
 
@@ -174,7 +175,7 @@
       $('#toExtract').onclick = () => setView('extract'); return;
     }
     runsEl.innerHTML = S.runs.map((r) => `<button class="run ${r.id === S.active ? 'on' : ''}" data-r="${r.id}"><b><i class="pdot" style="background:${stColor[r.status] || 'var(--muted)'}"></i>${h(r.label)}</b><small>${(r.count || 0).toLocaleString()} items · ${when(r.startedAt)}</small></button>`).join('');
-    runsEl.onclick = async (e) => { const b = e.target.closest('.run'); if (!b) return; S.active = b.dataset.r; S.q = ''; await loadRows(); renderResults(); };
+    runsEl.onclick = async (e) => { const b = e.target.closest('.run'); if (!b) return; S.userPicked = true; S.active = b.dataset.r; S.q = ''; await loadRows(); renderResults(); };
     renderViewer();
   }
   function visibleRows() {
@@ -312,7 +313,7 @@
         await loadRuns();
         const nowRun = wasRunning && S.runs.find((r) => r.id === wasRunning.id);
         if (nowRun && nowRun.status !== 'running' && nowRun.status !== 'paused') { S.justDone = nowRun.id; S.active = nowRun.id; if (nowRun.status === 'done') toast(`Done — ${nowRun.count} items collected`); }
-        if (S.view === 'results' || S.active && ('rows:' + S.active) in ch) { await loadRows(); }
+        await loadRows();
         renderLive(); if (S.view === 'results') renderResults();
       }, 350);
     });

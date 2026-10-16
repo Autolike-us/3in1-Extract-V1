@@ -8,17 +8,31 @@
   const RESERVED = /^(groups|marketplace|watch|events|pages|gaming|stories|reel|reels|friends|bookmarks|settings|help|login|profile\.php|photo|photos|share|hashtag|search|notifications|messages|ads|policies|privacy|about|public|story\.php|permalink\.php)$/i;
   const POST_HREF = /\/(posts|videos|reel|watch|photo|permalink)[/?]|story_fbid|\/photo\.php|\/groups\/[^/]+\/(posts|permalink)\//;
 
+  const FB = 'https://www.facebook.com';
+  const TABS = /^(about|friends|friends_all|friends_mutual|photos|photos_by|videos|posts|mentions|reels|more|following|followers|reviews|groups|map|sports|music|movies|tv|books|likes|check_ins|events|photo|search|settings|saved|notifications)$/i;
+  const K = (id, label, goto) => ({ id, label, ...(goto ? { goto } : {}) });
+
   function detect(u) {
     const p = u.pathname.replace(/\/+$/, '');
     const seg = p.split('/').filter(Boolean);
-    if (/^\/marketplace\/item\/\d+/.test(p)) return { label: 'Marketplace listing', primary: 'marketplace_item', kinds: [{ id: 'marketplace_item', label: 'This listing' }, { id: 'marketplace_seller', label: 'Seller details' }] };
-    if (/^\/marketplace/.test(p)) return { label: 'Marketplace results', primary: 'marketplace_list', kinds: [{ id: 'marketplace_list', label: 'All listings on screen' }] };
-    if (/^\/groups\/[^/]+\/(members|people)/.test(p)) return { label: 'Group members', primary: 'group_members', kinds: [{ id: 'group_members', label: 'Group members' }] };
-    if (/^\/groups\/[^/]+/.test(p)) return { label: 'Group feed', primary: 'posts', kinds: [{ id: 'posts', label: 'Group posts' }, { id: 'comments', label: 'Comments on an open post' }] };
-    if (/\/(posts|videos|reel)\/|story_fbid|permalink/.test(p + u.search)) return { label: 'Post', primary: 'comments', kinds: [{ id: 'comments', label: 'Comments' }, { id: 'posts', label: 'This post' }] };
+    const sk = u.searchParams.get('sk') || '';
+    if (/^\/marketplace\/item\/\d+/.test(p)) return { label: 'Marketplace listing', primary: 'marketplace_item', kinds: [K('marketplace_item', 'This listing (all photos)'), K('marketplace_seller', 'Seller details')] };
+    if (/^\/marketplace/.test(p)) return { label: 'Marketplace results', primary: 'marketplace_list', kinds: [K('marketplace_list', 'All listings on screen')] };
+    const g = p.match(/^\/groups\/([^/]+)/);
+    if (g) {
+      const base = `${FB}/groups/${g[1]}`;
+      if (/^\/groups\/[^/]+\/(members|people)/.test(p)) return { label: 'Group members', primary: 'group_members', kinds: [K('group_members', 'Group members'), K('group_info', 'Group info'), K('posts', 'Group posts', base + '/')] };
+      return { label: 'Group', primary: 'posts', kinds: [K('posts', 'Group posts'), K('group_members', 'Group members', base + '/members'), K('group_info', 'Group info'), K('comments', 'Comments (open a post first)')] };
+    }
+    if (/\/(posts|videos|reel)\/|story_fbid|permalink/.test(p + u.search)) return { label: 'Post', primary: 'comments', kinds: [K('comments', 'All comments'), K('commenters', 'People who commented'), K('reactors', 'People who reacted'), K('posts', 'This post (text + media)')] };
     if (seg.length && (!RESERVED.test(seg[0]) || seg[0] === 'profile.php')) {
-      if (/about/.test(p + u.search)) return { label: 'Profile / page — About', primary: 'page_info', kinds: [{ id: 'page_info', label: 'Contact & About details' }] };
-      return { label: 'Profile / page', primary: 'page_info', kinds: [{ id: 'page_info', label: 'Profile & contact details' }, { id: 'posts', label: 'Posts' }] };
+      const isId = seg[0] === 'profile.php';
+      const handle = isId ? '' : seg[0];
+      const tab = isId ? sk : (seg[1] || '');
+      const go = (t) => (isId ? `${FB}/profile.php?id=${u.searchParams.get('id')}&sk=${t}` : `${FB}/${handle}/${t}`);
+      if (/^(friends|friends_all|friends_mutual|followers|following)$/i.test(tab)) return { label: `People · ${tab.replace('_all', '')}`, primary: 'people', kinds: [K('people', `List of ${tab.replace('_all', '')} (names + profile links)`), K('page_info', 'Profile / page details', isId ? `${FB}/profile.php?id=${u.searchParams.get('id')}` : `${FB}/${handle}`)] };
+      if (/about/.test(tab)) return { label: 'Profile / page — About', primary: 'page_info', kinds: [K('page_info', 'Contact & About details')] };
+      return { label: 'Profile / page', primary: 'page_info', kinds: [K('page_info', 'Profile & contact details'), K('posts', 'Posts'), K('people_friends', 'Friends list', go('friends')), K('people_followers', 'Followers list', go('followers')), K('people_following', 'Following list', go('following'))] };
     }
     return { label: 'Facebook', primary: null, kinds: [] };
   }
@@ -210,10 +224,73 @@
     ctx.progress('Tip: open the "About" tab for more contact details.');
   }
 
+  /* ---------- people (friends / followers / following / reactors / commenters) ---------- */
+  function profileOf(href) {
+    let u; try { u = new URL(href, location.href); } catch (_) { return null; }
+    if (!/(^|\.)facebook\.com$/.test(u.hostname)) return null;
+    const seg = u.pathname.split('/').filter(Boolean);
+    if (seg[0] === 'profile.php' && u.searchParams.get('id')) return { key: u.searchParams.get('id'), url: `${FB}/profile.php?id=${u.searchParams.get('id')}` };
+    if (seg[0] === 'groups' && seg[2] === 'user' && seg[3]) return { key: seg[3], url: `${FB}/${seg[3]}` };
+    if (seg.length === 1 && !RESERVED.test(seg[0]) && !TABS.test(seg[0])) return { key: seg[0], url: `${FB}/${seg[0]}` };
+    return null;
+  }
+  function readPeople(root, seen, ctx, extra = {}) {
+    let added = 0;
+    for (const a of A.qa('a[href]', root)) {
+      const pr = profileOf(a.href);
+      const name = A.txt(a);
+      if (!pr || !name || name.length > 80 || seen.has(pr.key)) continue;
+      if (/^(see all|view|message|add friend|follow|following|friends|more)$/i.test(name)) continue;
+      seen.add(pr.key);
+      const card = a.closest('[role="listitem"], [role="article"]') || a.parentElement.parentElement || a;
+      const lines = (card.innerText || '').split('\n').map((x) => x.trim()).filter((x) => x && x !== name && !/^(add friend|message|follow|following|friends|remove|confirm|delete)$/i.test(x));
+      const img = A.q('img', card);
+      added += ctx.emit({ id: pr.key, name, profileUrl: pr.url, about: lines.slice(0, 2).join(' · ').slice(0, 160), avatar: img ? img.src : '', ...extra });
+    }
+    return added;
+  }
+
+  async function people(ctx) {
+    const seen = new Set();
+    const list = (location.pathname + location.search).match(/friends_mutual|friends|followers|following/i);
+    await A.scrollCollect(ctx, () => { const n = readPeople(A.q('[role="main"]') || document, seen, ctx, { list: list ? list[0].toLowerCase() : '' }); ctx.progress(); return n; }, { patience: 7 });
+    if (ctx.count() === 0 && ctx.setWarning) ctx.setWarning('No people were found. Facebook only shows these lists when the profile owner allows it — check the list is visible to you.');
+  }
+
+  /** Open a dialog by clicking a control, wait for it, and return it. */
+  async function openDialog(find, ctx, what) {
+    const before = A.qa('[role="dialog"]').length;
+    const btn = find();
+    ctx.log('info', `${what}: control ${btn ? 'found' : 'NOT found'}`);
+    if (btn) { btn.click(); for (let i = 0; i < 20; i++) { await A.sleep(300); const d = A.qa('[role="dialog"]'); if (d.length > before || (before && d.length)) return d[d.length - 1]; } }
+    return A.qa('[role="dialog"]').pop() || null;
+  }
+
+  async function reactors(ctx) {
+    const scope = A.q('[role="dialog"] [role="article"]') ? A.q('[role="dialog"]') : (A.q('[role="main"]') || document);
+    const dlg = await openDialog(() => A.qa('[role="button"], a, span[role="button"]', scope).find((e) => /(see who reacted|people reacted|all reactions|reactions?:|^\d[\d.,KkMm]* (reactions?|likes?))/i.test(e.getAttribute('aria-label') || '')) || A.qa('[role="button"]', scope).find((e) => /^\d[\d.,KkMm]*$/.test(A.txt(e)) && e.querySelector('img,i,svg')), ctx, 'reactions');
+    if (!dlg) throw new Error('Couldn\'t open the list of people who reacted. Click the reaction count under the post so the list pops up, then press Start again.');
+    const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
+    const seen = new Set();
+    await A.scrollCollect(ctx, () => { const n = readPeople(A.qa('[role="dialog"]').pop() || dlg, seen, ctx, { list: 'reactions', post: location.href.split('?')[0] }); ctx.progress(); return n; }, { container: box, patience: 6 });
+  }
+
+  async function commenters(ctx) { await A.commenters(ctx, comments); }
+
+  async function groupInfo(ctx) {
+    const main = A.q('[role="main"]') || document.body;
+    const txt = main.innerText || '';
+    const name = A.txt(A.q('h1')) || A.meta('og:title');
+    const members = (txt.match(/([\d.,]+[KkMm]?)\s+(?:total\s+)?members?/i) || [])[1];
+    const privacy = (txt.match(/\b(Public|Private|Visible|Hidden)\s+group/i) || [])[0] || '';
+    const posts = (txt.match(/([\d.,]+[KkMm]?)\s+(?:new\s+)?posts?\s+(?:today|this week|in the last)/i) || [])[0] || '';
+    ctx.emit({ id: location.pathname.split('/')[2], name, url: location.href.split('?')[0], members: A.parseCount(members), privacy, activity: posts, about: (A.meta('og:description') || '').slice(0, 600), media: A.meta('og:image') ? [{ type: 'image', url: A.meta('og:image') }] : [] });
+  }
+
   A.register('facebook', {
     name: 'Facebook', hosts: /(^|\.)facebook\.com$/, detect,
-    kinds: ['page_info', 'posts', 'comments', 'group_members', 'marketplace_list', 'marketplace_item'],
-    tasks: { page_info: pageInfo, posts, comments, group_members: groupMembers, marketplace_list: marketplaceList, marketplace_item: marketplaceItem, marketplace_seller: pageInfo },
+    kinds: ['page_info', 'posts', 'comments', 'commenters', 'reactors', 'people', 'people_friends', 'people_followers', 'people_following', 'group_info', 'group_members', 'marketplace_list', 'marketplace_item'],
+    tasks: { page_info: pageInfo, posts, comments, commenters, reactors, people, people_friends: people, people_followers: people, people_following: people, group_info: groupInfo, group_members: groupMembers, marketplace_list: marketplaceList, marketplace_item: marketplaceItem, marketplace_seller: pageInfo },
     _test: { parsePost, parseListingCard, detect },
   });
 })();
