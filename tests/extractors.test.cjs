@@ -64,6 +64,14 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   check('FB posts: counts + media', fp[0].comments === 5 && fp[0].shares === 2 && fp[0].media.length === 1);
   check('FB posts: fallback to dir=auto text', fp[1].text === 'Anyone selling a used bike?');
 
+  // ---- facebook profile timeline without role="article": permalink-card fallback
+  await load('https://www.facebook.com/profile.php?id=1', `<div role="main">
+    <div><div><a href="https://www.facebook.com/profile.php?id=1&story_fbid=111&__cft__[0]=x"><span>3h</span></a><div dir="auto">First post here</div><img src="https://scontent.fbcdn.net/p1.jpg" width="500" height="500"></div></div>
+    <div><div><a href="https://www.facebook.com/profile.php?id=1&story_fbid=222"><span>1d</span></a><div dir="auto">Second post here</div></div></div>
+    <div><div><a href="https://www.facebook.com/someone/videos/333/"><span>2d</span></a><div dir="auto">A video post</div></div></div></div>`, ...F, 'content/facebook.js');
+  const pf = await run('facebook', 'posts');
+  check('FB profile: falls back to permalink cards (3 posts, not 1)', pf.length === 3 && /First post/.test(pf[0].text) && /Second post/.test(pf[1].text) && /video post/.test(pf[2].text));
+
   // ---- marketplace + members
   await load('https://www.facebook.com/marketplace/austin', FB_MARKET, ...F, 'content/facebook.js');
   const mk = await run('facebook', 'marketplace_list');
@@ -117,6 +125,37 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   check('IG posts: 429 is retried then falls back to reading the grid', fb.rows.length === 2 && fb.logs.some((l) => /HTTP 429/.test(l)) && fb.logs.some((l) => /reading the page instead/.test(l)));
   check('IG reel resolves to the real .mp4 (not the thumbnail), unescaped', fb.rows[1].media[0].type === 'video' && fb.rows[1].media[0].url === 'https://v.cdn/reel.mp4?a=1&b=2');
   check('IG photo resolves to full-size images (carousel aware)', fb.rows[0].media.length === 2 && fb.rows[0].media[0].url === 'https://x/full1.jpg');
+
+  // ---- instagram: video addresses captured from Instagram's own page traffic
+  await load('https://www.instagram.com/shop/', `<a href="/reel/RRR/"><img alt="r" src="https://x/t.jpg"></a><a href="/reel/NNN/"><img alt="n" src="https://x/t2.jpg"></a>`, ...F, 'content/instagram.js');
+  const cap = await pg.evaluate(async () => {
+    AuroraX.sleep = () => Promise.resolve();
+    document.dispatchEvent(new CustomEvent('aurora-ig-media', { detail: JSON.stringify([{ code: 'RRR', items: [{ v: 'https://v.cdn/captured.mp4', i: 'https://x/c.jpg' }] }]) }));
+    const logs = []; AuroraX.log = (l, m, d) => logs.push(m);
+    window.fetch = async (u) => ({ ok: true, status: 200, headers: { get: () => 'text/html' }, text: async () => '<html>nothing here</html>', json: async () => ({}) });
+    const rows = []; let warning = ''; const ctx = { opts: { media: true }, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: AuroraX.log, setWarning: (w) => { warning = w; }, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.instagram.tasks.hashtag(ctx);
+    return { rows, warning, logs };
+  });
+  check('IG reel video comes from captured page data (no extra request)', cap.rows[0].media[0].type === 'video' && cap.rows[0].media[0].url === 'https://v.cdn/captured.mp4');
+  check('IG reel with no video anywhere is flagged + warning shown', cap.rows[1].videoMissing === true && /saved as a picture only/.test(cap.warning));
+
+  // ---- ig-sniffer (MAIN world): listens to Instagram's own JSON and reports video/photo addresses
+  await load('https://www.instagram.com/shop/', '', ...F);
+  await pg.evaluate(() => {
+    const body = JSON.stringify({ data: { xdt_feed: { edges: [{ node: { code: 'AAA', video_versions: [{ url: 'https://v/a.mp4' }], image_versions2: { candidates: [{ url: 'https://i/a.jpg' }] } } }, { node: { code: 'CCC', carousel_media: [{ image_versions2: { candidates: [{ url: 'https://i/c1.jpg' }] } }, { video_versions: [{ url: 'https://v/c2.mp4' }], image_versions2: { candidates: [{ url: 'https://i/c2.jpg' }] } }] } }] } }, pad: 'x'.repeat(80) });
+    window.fetch = async () => ({ ok: true, url: 'https://www.instagram.com/graphql/query', clone() { return { text: async () => body }; } });
+  });
+  await pg.addScriptTag({ content: read('content/ig-sniffer.js') });
+  const sn3 = await pg.evaluate(async () => {
+    const got = []; document.addEventListener('aurora-ig-media', (e) => got.push(...JSON.parse(e.detail)));
+    await fetch('https://www.instagram.com/graphql/query'); await new Promise((r) => setTimeout(r, 50));
+    const first = got.slice();
+    got.length = 0; document.dispatchEvent(new CustomEvent('aurora-ig-replay'));
+    return { first, replay: got };
+  });
+  check('ig-sniffer captures reel video + carousel items from page JSON', sn3.first.length === 2 && sn3.first[0].items[0].v === 'https://v/a.mp4' && sn3.first[1].items[1].v === 'https://v/c2.mp4');
+  check('ig-sniffer replays everything captured on request', sn3.replay.length === 2);
 
   // ---- instagram: following list via the profile link + dialog (no API needed)
   await load('https://www.instagram.com/shop/', `<header><ul><li><a href="/shop/followers/">1 followers</a></li><li><a href="/shop/following/" id="fl">2 following</a></li></ul></header><div id="host"></div>

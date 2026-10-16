@@ -56,7 +56,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
       case 'progress': await updateRun(msg.runId, { count: msg.count, note: msg.note || '' }); return send({});
       case 'done': {
         await flush();
-        await updateRun(msg.runId, { count: msg.count, status: msg.error ? 'error' : msg.stopped ? 'stopped' : 'done', error: msg.error, finishedAt: Date.now(), note: '', snapshot: msg.snapshot || null });
+        await updateRun(msg.runId, { count: msg.count, status: msg.error ? 'error' : msg.stopped ? 'stopped' : 'done', error: msg.error, finishedAt: Date.now(), note: '', snapshot: msg.snapshot || null, warning: msg.warning || '' });
         return send({});
       }
       case 'startRun': return send(await startRun(msg));

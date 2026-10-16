@@ -53,20 +53,48 @@
     };
   }
 
+  /** Fallback when a page doesn't mark posts with role="article": one card per distinct post permalink. */
+  function permalinkCards() {
+    const byId = new Map();
+    for (const a of A.qa('a[href]')) {
+      const h = a.getAttribute('href') || '';
+      if (!POST_HREF.test(h) || /comment_id|reply_comment/.test(h)) continue;
+      const id = (h.match(/\/(?:posts|videos|reel|permalink)\/([\w.-]+)/) || h.match(/(?:story_fbid|fbid|v)=([\w.-]+)/) || [])[1] || h.split('?')[0];
+      if (!byId.has(id)) byId.set(id, a);
+    }
+    const anchors = Array.from(byId.values()), cards = [];
+    for (const a of anchors) {
+      let el = a;
+      while (el.parentElement && el.parentElement !== document.body && !el.parentElement.matches('[role="main"],[role="feed"]')) {
+        const p = el.parentElement;
+        if (anchors.some((b) => b !== a && p.contains(b))) break;
+        el = p;
+      }
+      cards.push(el);
+    }
+    return cards;
+  }
+
   async function posts(ctx) {
     const seen = new Set();
+    let pull = 0;
+    const log = (...a) => ctx.log && ctx.log(...a);
     await A.scrollCollect(ctx, () => {
-      let added = 0;
-      for (const art of articleList()) {
+      let added = 0, empty = 0, dup = 0;
+      const arts = articleList();
+      const cards = arts.length < 3 ? permalinkCards() : [];
+      for (const art of arts.concat(cards)) {
         const row = parsePost(art);
         const key = row.url || (row.author + row.text.slice(0, 60));
-        if (!row.text && !row.media.length) continue;
-        if (seen.has(key)) continue;
+        if (!row.url && !row.text && !row.media.length) { empty++; continue; }
+        if (seen.has(key)) { dup++; continue; }
         seen.add(key);
         added += ctx.emit(row);
       }
+      pull++;
+      if (pull <= 3 || pull % 5 === 0 || added === 0) log('info', `pull ${pull}: articles=${arts.length} permalinkCards=${cards.length} new=${added} empty=${empty} dup=${dup}`);
       ctx.progress(); return added;
-    });
+    }, { patience: 7 });
   }
 
   async function comments(ctx) {

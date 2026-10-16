@@ -84,7 +84,9 @@
       try { r = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json', ...headers } }); }
       catch (e) { A.log('error', 'network error ' + shortUrl(url), String(e)); throw e; }
       if (r.ok) {
-        try { return await r.json(); } catch (e) { A.log('error', 'bad JSON from ' + shortUrl(url), 'content-type=' + r.headers.get('content-type')); throw new Error('Unexpected response (not JSON) — are you logged in?'); }
+        const body = await r.text();
+        try { return JSON.parse(body.replace(/^for \(;;\);/, '')); }
+        catch (e) { A.log('error', 'bad JSON from ' + shortUrl(url), `content-type=${r.headers.get('content-type')} redirected=${r.redirected} len=${body.length} starts="${body.slice(0, 70).replace(/\s+/g, ' ')}"`); throw new Error('Unexpected response (not JSON) — are you logged in?'); }
       }
       const ra = Number(r.headers.get('retry-after')) * 1000;
       A.log('warn', `HTTP ${r.status} ${shortUrl(url)}`, attempt < retries && (r.status === 429 || r.status >= 500) ? `retry ${attempt + 1}/${retries}` : '');

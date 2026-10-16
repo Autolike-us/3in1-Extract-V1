@@ -5,7 +5,14 @@
   const A = globalThis.AuroraX;
   if (!A) return;
   const APP_ID = '936619743392459';
-  const H = { 'x-ig-app-id': APP_ID, 'x-requested-with': 'XMLHttpRequest' };
+  const cookie = (n) => (document.cookie.match(new RegExp('(?:^|; )' + n + '=([^;]*)')) || [])[1] || '';
+  const H = { 'x-ig-app-id': APP_ID, 'x-requested-with': 'XMLHttpRequest', 'x-asbd-id': '129477', 'x-ig-www-claim': (() => { try { return sessionStorage.getItem('www-claim-v2') || '0'; } catch (_) { return '0'; } })() };
+  const csrf = cookie('csrftoken'); if (csrf) H['x-csrftoken'] = csrf;
+
+  /* media addresses captured by ig-sniffer.js from Instagram's own page traffic */
+  const CAPTURED = {};
+  document.addEventListener('aurora-ig-media', (e) => { try { for (const m of JSON.parse(e.detail)) CAPTURED[m.code] = m.items; } catch (_) {} });
+  document.dispatchEvent(new CustomEvent('aurora-ig-replay'));
   const NOT_USER = /^(p|reel|reels|tv|explore|accounts|direct|stories|about|developers|legal|web|challenge|oauth|emails|nametag|lite)$/i;
 
   const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -117,8 +124,29 @@
   }
 
   const unesc = (t) => t.replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
-  /** Open a post/reel page and pull its real media (video file or full-size photos) — thumbnails in the grid are tiny and never videos. */
-  async function enrichPost(url) {
+  const fromItems = (items) => A.dedupeMedia([].concat(...items.map((x) => (x.v ? [{ type: 'video', url: x.v }] : x.i ? [{ type: 'image', url: x.i }] : []))));
+  const codeOf = (u) => (u.match(/\/(?:p|reel|tv)\/([^/?]+)/) || [])[1];
+
+  /** Real media for one post/reel. Tries, in order: what Instagram's own page already loaded, the media API,
+   *  the embed page, then the post page itself. Returns { media, caption, via }. */
+  async function enrichPost(url, ctx) {
+    const code = codeOf(url), isReel = /\/(reel|tv)\//.test(url);
+    const good = (m) => m.length && (!isReel || m.some((x) => x.type === 'video'));
+    if (CAPTURED[code]) { const m = fromItems(CAPTURED[code]); if (good(m)) return { media: m, via: 'page-data' }; }
+    try {
+      const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${shortcodeToId(code)}/info/`, H, { retries: 0 });
+      const it = j.items && j.items[0];
+      if (it) { const m = mediaOf(it); if (good(m)) return { media: m, caption: (it.caption && it.caption.text) || '', via: 'api' }; }
+    } catch (e) { ctx.log('warn', 'media api: ' + e.message); }
+    try {
+      const html = await (await fetch(`https://www.instagram.com/${isReel ? 'reel' : 'p'}/${code}/embed/captioned/`, { credentials: 'include' })).text();
+      const out = [];
+      for (const m of html.matchAll(/"video_url":"([^"]+)"/g)) out.push({ type: 'video', url: unesc(m[1]) });
+      for (const m of html.matchAll(/<video[^>]+src="([^"]+)"/g)) out.push({ type: 'video', url: unesc(m[1]) });
+      if (!out.length) { for (const m of html.matchAll(/"display_url":"([^"]+)"/g)) out.push({ type: 'image', url: unesc(m[1]) }); const im = html.match(/class="EmbeddedMediaImage"[^>]+src="([^"]+)"/); if (im) out.push({ type: 'image', url: unesc(im[1]) }); }
+      const m = A.dedupeMedia(out); if (good(m)) return { media: m, via: 'embed' };
+      ctx.log('warn', 'embed page had no ' + (isReel ? 'video' : 'media'), `len=${html.length}`);
+    } catch (e) { ctx.log('warn', 'embed: ' + e.message); }
     const r = await fetch(url, { credentials: 'include' });
     if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
     const html = await r.text();
@@ -132,13 +160,13 @@
       if (!out.length && oi) out.push({ type: 'image', url: unesc(oi[1]) });
     }
     const cap = html.match(/property="og:title" content="([^"]*)"/);
-    return { media: A.dedupeMedia(out).slice(0, 12), caption: cap ? unesc(cap[1]) : '' };
+    return { media: A.dedupeMedia(out).slice(0, 12), caption: cap ? unesc(cap[1]) : '', via: 'page-html' };
   }
 
   async function gridDom(ctx, tag) {
     const seen = new Set();
     const wantMedia = ctx.opts.media !== false;
-    let fails = 0;
+    let fails = 0, noVideo = 0;
     await A.scrollCollect(ctx, () => {
       const fresh = [];
       for (const a of A.qa('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]')) {
@@ -153,8 +181,14 @@
       for (const row of fresh) {
         if (ctx.stopped() || ctx.count() >= ctx.limit) break;
         if (wantMedia && fails < 3) {
-          try { const e = await enrichPost(row.url); if (e.media.length) row.media = e.media; if (e.caption && !row.caption) row.caption = e.caption; if (row.type === 'reel' && !e.media.some((m) => m.type === 'video')) ctx.log('warn', 'no video file found for a reel', row.url.replace(/\/reel\/[^/]+/, '/reel/<code>')); fails = 0; }
-          catch (err) { fails++; ctx.log('warn', 'could not load post media: ' + err.message, fails >= 3 ? 'giving up on media for this run — thumbnails only' : ''); }
+          try {
+            const e = await enrichPost(row.url, ctx);
+            if (e.media.length) row.media = e.media;
+            if (e.caption && !row.caption) row.caption = e.caption;
+            if (row.type === 'reel' && !e.media.some((m) => m.type === 'video')) { row.videoMissing = true; noVideo++; ctx.log('warn', 'no video file found for a reel (tried page data, API, embed, page)'); }
+            else ctx.log('info', `media ok via ${e.via}`, e.media.map((m) => m.type).join(','));
+            fails = 0;
+          } catch (err) { fails++; ctx.log('warn', 'could not load post media: ' + err.message, fails >= 3 ? 'giving up on media for this run — thumbnails only' : ''); }
           await ctx.pause();
         }
         added += ctx.emit(row);
@@ -162,6 +196,7 @@
       }
       return added;
     } });
+    if (noVideo && ctx.setWarning) ctx.setWarning(`${noVideo} reel${noVideo > 1 ? 's' : ''} saved as a picture only — Instagram didn't expose the video file. Reload the profile, scroll down so the reels load, then run again (rows marked videoMissing).`);
   }
   async function posts(ctx) {
     const user = currentUser();

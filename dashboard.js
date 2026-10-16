@@ -142,7 +142,7 @@
     el.innerHTML = `
       <div class="ring" style="--p:${pct}"><b>${(r.count || 0).toLocaleString()}</b></div>
       <div><h3>${live ? (r.status === 'paused' ? '⏸ Paused' : 'Collecting…') : r.status === 'error' ? '⚠️ Stopped with a problem' : '✅ Done'} <span class="note">${h(r.label)}</span></h3>
-        <p>${h(r.error || r.note || (live ? 'Scrolling and reading the page. Keep that tab open.' : `${(r.count || 0).toLocaleString()} items saved.`))}</p><div class="bar"><i></i></div></div>
+        <p>${h(r.error || r.note || (live ? 'Scrolling and reading the page. Keep that tab open.' : `${(r.count || 0).toLocaleString()} items saved.`))}</p>${r.warning && !live ? `<p class="warn" style="margin-top:10px">⚠️ ${h(r.warning)}</p>` : ''}<div class="bar"><i></i></div></div>
       <div class="actions" style="margin:0">
         ${live ? `<button class="btn" data-a="pause">${r.status === 'paused' ? '▶ Resume' : '⏸ Pause'}</button><button class="btn danger" data-a="stop">■ Stop</button>` : `<button class="btn primary" data-a="view">View results</button>${r.status === 'error' || !r.count ? '<button class="btn" data-a="report">🐞 Copy debug report</button>' : ''}`}
       </div>`;
@@ -198,6 +198,7 @@
       <div class="vtools"><input type="search" id="q" placeholder="Search these results…" value="${h(S.q)}">
         ${emails.size ? `<button class="btn" data-x="emails">✉ Copy ${emails.size} email${emails.size > 1 ? 's' : ''}</button>` : ''}
         <span style="flex:1"></span><button class="btn danger" data-x="delete">Delete</button></div>
+      ${run.warning ? `<div class="warn" style="margin:14px 22px 0">⚠️ ${h(run.warning)}</div>` : ''}
       ${rows.length ? `<div class="tablewrap"><table><thead><tr>${hasThumb ? '<th></th>' : ''}${cols.map((c) => `<th>${h(nice(c))}</th>`).join('')}</tr></thead><tbody>
         ${shown.map((r) => `<tr>${hasThumb ? `<td>${thumb(r)}</td>` : ''}${cols.map((c) => cellHtml(r[c], c)).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="vfoot"><span>Showing ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}</span>${shown.length < rows.length ? '<button class="btn" data-x="more">Show more</button>' : ''}</div>`

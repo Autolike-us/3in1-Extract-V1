@@ -30,7 +30,7 @@
     const log = (level, msg, data) => send({ type: 'log', runId, entry: { t: Date.now(), l: level, m: String(msg).slice(0, 300), d: data == null ? '' : String(data).slice(0, 600) } });
     A.log = log;
     const ctx = {
-      log, opts, limit: Math.max(1, Number(opts.limit) || 200),
+      log, setWarning: (w) => { state.warning = w; }, opts, limit: Math.max(1, Number(opts.limit) || 200),
       stopped: () => state.stop,
       count: () => state.n,
       pause: async () => { await A.sleep(A.jitter(delay)); while (state.paused && !state.stop) await A.sleep(300); },
@@ -53,10 +53,10 @@
       log('info', `start ${id}/${kind}`, `limit=${ctx.limit} delay=${delay}ms path=${A.snapshot().path}`);
       try { await task(ctx); } catch (e) { error = String((e && e.message) || e); log('error', 'task failed: ' + error, e && e.stack ? String(e.stack).split('\n').slice(0, 3).join(' | ') : ''); }
       state.done = true;
-      const snapshot = state.n === 0 || error ? A.snapshot() : null;
+      const snapshot = state.n < 3 || error ? A.snapshot() : null;
       log(error ? 'error' : 'info', `finished: ${state.n} rows${state.stop ? ' (stopped)' : ''}`, error || '');
       A.log = () => {};
-      send({ type: 'done', runId, count: state.n, stopped: state.stop, error, snapshot });
+      send({ type: 'done', runId, count: state.n, stopped: state.stop, error, snapshot, warning: state.warning || '' });
     })();
     return { ok: true };
   }
