@@ -24,7 +24,7 @@
   }
 
   /* ---------- helpers ---------- */
-  function articleList() { return A.qa('[role="article"]').filter((a) => !a.parentElement.closest('[role="article"]') || a.querySelector('a[href*="comment_id"]') === null); }
+  function articleList() { return A.qa('[role="article"]').filter((a) => !a.closest('[role="complementary"], [role="navigation"], [role="banner"]') && ( !a.parentElement.closest('[role="article"]') || a.querySelector('a[href*="comment_id"]') === null)); }
 
   function parsePost(art) {
     A.expandText(art);
@@ -128,7 +128,7 @@
     const seen = new Set();
     await A.scrollCollect(ctx, () => {
       let added = 0;
-      for (const a of A.qa('a[href*="/groups/"][href*="/user/"]')) {
+      for (const a of A.qa('a[href*="/groups/"][href*="/user/"]', A.q('[role="main"]') || document)) {
         const m = a.href.match(/\/user\/(\d+)/);
         const name = A.txt(a);
         if (!m || !name || seen.has(m[1])) continue;
@@ -156,7 +156,7 @@
     const seen = new Set();
     await A.scrollCollect(ctx, () => {
       let added = 0;
-      for (const a of A.qa('a[href*="/marketplace/item/"]')) {
+      for (const a of A.qa('a[href*="/marketplace/item/"]', A.q('[role="main"]') || document)) {
         const id = (a.href.match(/\/marketplace\/item\/(\d+)/) || [])[1];
         if (!id || seen.has(id)) continue; seen.add(id);
         added += ctx.emit(parseListingCard(a));

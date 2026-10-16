@@ -265,7 +265,7 @@
       while (queue.length) {
         const it = queue.shift();
         try {
-          const res = await fetch(it.m.url, { credentials: 'omit' });
+          const res = await fetch(it.m.url, { credentials: /tiktok/.test(it.m.url) ? 'include' : 'omit' });
           if (!res.ok) throw new Error(res.status);
           const buf = new Uint8Array(await res.arrayBuffer());
           const ext = EXT[(res.headers.get('content-type') || '').split(';')[0]] || (it.m.type === 'video' ? 'mp4' : 'jpg');

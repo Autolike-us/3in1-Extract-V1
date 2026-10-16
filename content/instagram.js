@@ -169,7 +169,9 @@
     let fails = 0, noVideo = 0;
     await A.scrollCollect(ctx, () => {
       const fresh = [];
-      for (const a of A.qa('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]')) {
+      const scope = A.q('main') || document;
+      for (const a of A.qa('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]', scope)) {
+        if (a.closest('[role="dialog"], aside, nav')) continue; // suggestions, pop-ups, side menus are not this page's posts
         const url = A.abs(a.getAttribute('href')).split('?')[0];
         if (seen.has(url)) continue; seen.add(url);
         const img = A.q('img', a);
@@ -226,6 +228,7 @@
       if (link) { (link.closest('a') || link).click(); for (let i = 0; i < 20 && !dlg; i++) { await A.sleep(300); dlg = A.q('[role="dialog"]'); } }
     }
     if (!dlg) throw new Error(`Couldn't open the ${which} list. Click "${which}" on the profile yourself so the list pops up, then press Start again.`);
+    if (!new RegExp(which, 'i').test((dlg.innerText || '').slice(0, 200))) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
     ctx.log('info', `${which}: dialog open`);
     const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
     const seen = new Set();

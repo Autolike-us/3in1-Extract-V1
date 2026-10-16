@@ -9,7 +9,7 @@
     const seg = u.pathname.split('/').filter(Boolean);
     if (seg[0] === 'tag' && seg[1]) return { label: '#' + decodeURIComponent(seg[1]), primary: 'hashtag', kinds: [{ id: 'hashtag', label: 'Hashtag videos' }] };
     if (seg[0] && seg[0].startsWith('@') && seg[1] === 'video') return { label: 'Video', primary: 'comments', kinds: [{ id: 'comments', label: 'Comments' }, { id: 'video', label: 'This video (with download)' }] };
-    if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos' }, { id: 'followers', label: 'Followers / following list' }] };
+    if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos (with files)' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }] };
     if (seg[0] === 'search' || seg[0] === 'explore' || seg[0] === 'discover') return { label: 'Search / discover', primary: 'videos', kinds: [{ id: 'videos', label: 'Videos on screen' }] };
     return { label: 'TikTok', primary: null, kinds: [] };
   }
@@ -37,8 +37,9 @@
     const v = it.video || {}, st = it.stats || {};
     const url = v.downloadAddr || v.playAddr || (v.bitrateInfo && v.bitrateInfo[0] && v.bitrateInfo[0].PlayAddr && v.bitrateInfo[0].PlayAddr.UrlList[0]) || '';
     const desc = it.desc || '';
+    const au = typeof it.author === 'string' ? it.author : (it.author && it.author.uniqueId) || '';
     return {
-      id: it.id, url: `https://www.tiktok.com/@${(it.author && it.author.uniqueId) || it.author}/video/${it.id}`, author: (it.author && it.author.uniqueId) || it.author,
+      id: it.id, url: au ? `https://www.tiktok.com/@${au}/video/${it.id}` : '', author: au,
       description: desc, hashtags: (desc.match(/#[\p{L}\p{N}_]+/gu) || []), music: it.music && it.music.title,
       plays: +st.playCount || null, likes: +st.diggCount || null, comments: +st.commentCount || null, shares: +st.shareCount || null, saves: +st.collectCount || null,
       postedAt: it.createTime ? new Date(it.createTime * 1000).toISOString() : '', duration: v.duration,
@@ -46,38 +47,105 @@
     };
   }
 
+  /* ---------- page data (TikTok is a single-page app: the embedded JSON goes stale after in-app navigation) ---------- */
+  function parseState(html) {
+    const m = html.match(/<script[^>]+id="(?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE)"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) return {};
+    try { const j = JSON.parse(m[1]); return j.__DEFAULT_SCOPE__ || j; } catch (_) { return {}; }
+  }
+  /** Embedded state if it matches what the URL says we're on, otherwise a fresh copy of this page. */
+  async function freshState(ok, ctx) {
+    let st = state();
+    if (ok(st)) return st;
+    ctx.log('info', 'embedded page data is stale (in-app navigation) — reloading page data');
+    const r = await fetch(location.href.split('?')[0], { credentials: 'include' });
+    st = parseState(await r.text());
+    return st;
+  }
+  const handleHere = () => decodeURIComponent((location.pathname.match(/^\/@([^/]+)/) || [])[1] || '');
+  const videoIdHere = () => (location.pathname.match(/\/video\/(\d+)/) || [])[1] || '';
+
   /* ---------- tasks ---------- */
   async function profile(ctx) {
-    const d = state()['webapp.user-detail'];
-    if (d && d.userInfo) return void ctx.emit(mapUser(d.userInfo));
-    // DOM fallback
+    const h = handleHere().toLowerCase();
+    const st = await freshState((x) => { const u = x['webapp.user-detail'] && x['webapp.user-detail'].userInfo && x['webapp.user-detail'].userInfo.user; return u && String(u.uniqueId).toLowerCase() === h; }, ctx);
+    const d = st['webapp.user-detail'];
+    if (d && d.userInfo && d.userInfo.user && String(d.userInfo.user.uniqueId).toLowerCase() === h) return void ctx.emit(mapUser(d.userInfo));
+    ctx.log('warn', 'profile data not in page — reading the header instead');
     const name = A.txt(A.q('[data-e2e="user-title"]')), bio = A.txt(A.q('[data-e2e="user-bio"]'));
     const c = A.contacts(bio);
-    ctx.emit({ id: location.pathname, username: name, name: A.txt(A.q('[data-e2e="user-subtitle"]')), url: location.href.split('?')[0], bio,
+    ctx.emit({ id: location.pathname, username: name || h, name: A.txt(A.q('[data-e2e="user-subtitle"]')), url: location.href.split('?')[0], bio,
       followers: A.parseCount(A.txt(A.q('[data-e2e="followers-count"]'))), following: A.parseCount(A.txt(A.q('[data-e2e="following-count"]'))), likes: A.parseCount(A.txt(A.q('[data-e2e="likes-count"]'))),
       email: c.emails[0] || '', phone: c.phones[0] || '', website: A.txt(A.q('[data-e2e="user-link"]')) });
   }
 
+  /** The grid that belongs to THIS page (profile videos / hashtag / search) — never the whole document, which also holds
+   *  suggested videos, the activity inbox and side panels. */
+  const GRIDS = ['[data-e2e="user-post-item-list"]', '[data-e2e="challenge-item-list"]', '[data-e2e="search_top-item-list"]', '[data-e2e="search-card-item-list"]', '[data-e2e="search_video-item-list"]', '[data-e2e="explore-item-list"]'];
+  const ITEMS = '[data-e2e="user-post-item"], [data-e2e="challenge-item"], [data-e2e="search_top-item"], [data-e2e="search-card-item"], [data-e2e="search_video-item"], [data-e2e="explore-item"]';
+  function findGrid() {
+    for (const g of GRIDS) { const el = A.q(g); if (el) return { el, via: g }; }
+    const item = A.q(ITEMS);
+    if (item && item.parentElement) return { el: item.parentElement, via: 'item-parent' };
+    return null;
+  }
+  const idFromHref = (h) => { const m = h.match(/\/@([^/?]+)\/video\/(\d+)/); return m ? { user: decodeURIComponent(m[1]), id: m[2] } : null; };
+
+  /** Open a video's own page data and return the full record (real author, stats, downloadable file). */
+  async function videoRecord(handle, id) {
+    const r = await fetch(`https://www.tiktok.com/@${encodeURIComponent(handle)}/video/${id}`, { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const st = parseState(await r.text());
+    const it = st['webapp.video-detail'] && st['webapp.video-detail'].itemInfo && st['webapp.video-detail'].itemInfo.itemStruct;
+    if (!it || String(it.id) !== String(id)) throw new Error('video data not found');
+    return mapVideo(it);
+  }
+
   async function videos(ctx) {
+    const grid = findGrid();
+    if (!grid) throw new Error("Couldn't find the video grid on this page. Open a profile's Videos tab, a hashtag page or search results, then try again.");
+    ctx.log('info', 'video grid found via ' + grid.via, `items=${A.qa(ITEMS).length}`);
+    const pageHandle = handleHere();
+    const wantMedia = ctx.opts.media !== false;
     const seen = new Set();
+    let fails = 0, noFile = 0;
     await A.scrollCollect(ctx, () => {
-      let added = 0;
-      for (const a of A.qa('a[href*="/video/"]')) {
-        const m = a.href.match(/@([^/]+)\/video\/(\d+)/);
-        if (!m || seen.has(m[2])) continue; seen.add(m[2]);
-        const card = a.closest('[data-e2e="user-post-item"], [data-e2e="search_top-item"], [data-e2e="challenge-item"], div') || a;
-        const img = A.q('img', card);
-        const views = A.q('[data-e2e="video-views"]', card);
-        added += ctx.emit({ id: m[2], url: a.href.split('?')[0], author: m[1], description: img ? img.alt : '', plays: views ? A.parseCount(A.txt(views)) : null, cover: img ? img.src : '', media: img ? [{ type: 'image', url: img.src }] : [] });
+      const fresh = [];
+      const g = findGrid() || grid;
+      for (const a of A.qa('a[href*="/video/"]', g.el)) {
+        const k = idFromHref(a.href); if (!k || seen.has(k.id)) continue; seen.add(k.id);
+        const card = a.closest(ITEMS) || a.parentElement || a;
+        const img = A.q('img', card), views = A.q('[data-e2e="video-views"]', card);
+        const handle = /^\d+$/.test(k.user) && pageHandle ? pageHandle : k.user;
+        fresh.push({ id: k.id, url: `https://www.tiktok.com/@${handle}/video/${k.id}`, author: handle, description: img ? img.alt : '', plays: views ? A.parseCount(A.txt(views)) : null, thumb: img ? img.src : '', media: img ? [{ type: 'image', url: img.src }] : [] });
       }
-      ctx.progress(); return added;
-    });
+      return fresh;
+    }, { async: true, process: async (fresh) => {
+      let added = 0;
+      for (const row of fresh) {
+        if (ctx.stopped() || ctx.count() >= ctx.limit) break;
+        if (wantMedia && fails < 3) {
+          try {
+            const rec = await videoRecord(row.author, row.id);
+            Object.assign(row, { ...rec, id: row.id, url: rec.url || row.url, thumb: row.thumb });
+            if (!rec.media.some((m) => m.type === 'video')) { noFile++; row.videoMissing = true; }
+            fails = 0;
+          } catch (e) { fails++; ctx.log('warn', 'could not load video data: ' + e.message, fails >= 3 ? 'giving up on video files for this run — thumbnails only' : ''); }
+          await ctx.pause();
+        }
+        added += ctx.emit(row);
+        ctx.progress();
+      }
+      return added;
+    } });
+    if (noFile && ctx.setWarning) ctx.setWarning(`${noFile} video${noFile > 1 ? 's' : ''} had no downloadable file (TikTok streams some videos in pieces) — only the cover picture was saved.`);
   }
 
   async function video(ctx) {
-    const d = state()['webapp.video-detail'];
-    const it = d && d.itemInfo && d.itemInfo.itemStruct;
-    if (!it) throw new Error('Video data not found on this page — reload the page and try again.');
+    const id = videoIdHere();
+    const st = await freshState((x) => { const it = x['webapp.video-detail'] && x['webapp.video-detail'].itemInfo && x['webapp.video-detail'].itemInfo.itemStruct; return it && String(it.id) === id; }, ctx);
+    const it = st['webapp.video-detail'] && st['webapp.video-detail'].itemInfo && st['webapp.video-detail'].itemInfo.itemStruct;
+    if (!it || String(it.id) !== id) throw new Error('Video data not found on this page — reload the page and try again.');
     ctx.emit(mapVideo(it));
   }
 
@@ -101,25 +169,40 @@
     }, { patience: 6 });
   }
 
-  async function followers(ctx) {
+  /** Followers / following: ONLY rows inside the profile's list popup. */
+  async function followList(ctx, which) {
+    const popup = () => A.q('[data-e2e="follow-info-popup"]');
+    let pop = popup();
+    if (!pop) {
+      const cnt = A.q(`[data-e2e="${which}-count"]`);
+      const target = cnt && (cnt.closest(`[data-e2e="${which}"]`) || cnt.closest('a, button, [role="button"]') || cnt.parentElement || cnt);
+      ctx.log('info', `${which}: popup closed — ${target ? 'clicking the count' : 'count NOT found'}`);
+      if (target) { target.click(); for (let i = 0; i < 20 && !pop; i++) { await A.sleep(300); pop = popup(); } }
+    }
+    if (!pop) throw new Error(`Couldn't open the ${which} list. Click "${which[0].toUpperCase() + which.slice(1)}" on the profile so the list pops up, then press Start again.`);
+    const Which = which[0].toUpperCase() + which.slice(1);
+    const tab = A.qa('[role="tab"], [data-e2e*="tab"], div, span, p', pop).find((e) => e.children.length < 3 && new RegExp('^' + Which + '\\b', 'i').test(A.txt(e)) && A.txt(e).length < 30 && e.getAttribute('aria-selected') !== 'true');
+    if (tab && !A.qa('[aria-selected="true"]', pop).some((e) => new RegExp(which, 'i').test(A.txt(e)))) { tab.click(); await A.sleep(1200); }
+    const box = A.qa('ul, div', pop).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
+    ctx.log('info', `${which}: popup open`, `scrollable=${!!box} links=${A.qa('a[href^="/@"]', pop).length}`);
     const seen = new Set();
-    const box = () => A.q('[data-e2e="follow-info-popup"]') || document;
     await A.scrollCollect(ctx, () => {
       let added = 0;
-      for (const a of A.qa('a[href^="/@"]', box())) {
-        const u = (a.getAttribute('href').match(/^\/@([^/?]+)/) || [])[1];
+      for (const a of A.qa('a[href^="/@"]', popup() || pop)) {
+        const u = decodeURIComponent((a.getAttribute('href').match(/^\/@([^/?]+)/) || [])[1] || '');
         if (!u || seen.has(u)) continue; seen.add(u);
-        const row = a.closest('li, [data-e2e="user-item"], div') || a;
-        added += ctx.emit({ id: u, username: u, name: A.txt(A.q('[data-e2e="follow-info-popup"] p, p', row)), url: 'https://www.tiktok.com/@' + u, avatar: (A.q('img', row) || {}).src || '' });
+        const row = a.closest('li, [data-e2e="user-item"]') || a.parentElement.parentElement || a;
+        const lines = (row.innerText || '').split('\n').map((x) => x.trim()).filter((x) => x && x !== u && !/^(follow|following|friends|remove|message)$/i.test(x));
+        added += ctx.emit({ id: u, username: u, name: lines[0] || '', url: 'https://www.tiktok.com/@' + u, list: which, avatar: (A.q('img', row) || {}).src || '' });
       }
-      ctx.progress('Open the Followers or Following list first.'); return added;
-    }, { container: A.q('[data-e2e="follow-info-popup"] ul, [data-e2e="follow-info-popup"]') || undefined, patience: 6 });
+      ctx.progress(); return added;
+    }, { container: box, patience: 6 });
   }
 
   A.register('tiktok', {
     name: 'TikTok', hosts: /(^|\.)tiktok\.com$/, detect,
-    kinds: ['profile', 'videos', 'video', 'comments', 'followers', 'hashtag'],
-    tasks: { profile, videos, video, comments, followers, hashtag: videos },
+    kinds: ['profile', 'videos', 'video', 'comments', 'followers', 'following', 'hashtag'],
+    tasks: { profile, videos, video, comments, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos },
     _test: { mapUser, mapVideo, detect },
   });
 })();

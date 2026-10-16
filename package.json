@@ -1,6 +1,6 @@
 {
   "name": "aurora-extract",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "scripts": {
     "test": "node tests/core.test.cjs && node tests/extractors.test.cjs",

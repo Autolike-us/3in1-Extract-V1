@@ -63,7 +63,7 @@
       post: 'Post', hashtag: 'Hashtag', videos: 'Videos', video: 'Video',
     },
     preferred: ['name', 'username', 'title', 'author', 'text', 'caption', 'description', 'bio', 'price', 'email', 'emails', 'phone', 'phones', 'website', 'websites', 'followers', 'following', 'likes', 'comments', 'plays', 'shares', 'url', 'profileUrl'],
-    hidden: ['platform', 'kind', 'media', 'sourceUrl', 'collectedAt', 'avatar', 'image', 'cover', 'authorUrl', 'emailsInText', 'phonesInText'],
+    hidden: ['platform', 'kind', 'media', 'sourceUrl', 'collectedAt', 'avatar', 'image', 'cover', 'thumb', 'authorUrl', 'emailsInText', 'phonesInText'],
     studios: [
       { id: 'facebook', name: 'Aurora Facebook Studio', color: '#1877f2', text: 'Likes, reactions, comments and follows on pages, groups and hashtags — previewed before it runs.' },
       { id: 'instagram', name: 'Aurora Instagram Studio', color: '#e1306c', text: 'Engage hashtags, profiles and followers lists with human-like pacing and local history.' },

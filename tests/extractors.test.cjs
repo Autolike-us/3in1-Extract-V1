@@ -107,6 +107,58 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const tc = await run('tiktok', 'comments');
   check('TikTok comments: author, text, likes (1.2K), time', tc.length === 2 && tc[0].author === 'fan1' && tc[0].likes === 1200 && tc[0].postedAt === '2d' && /Love it/.test(tc[0].text));
 
+  // ---- tiktok: only THIS page's grid; real video files; popup-only followers; stale SPA data
+  const ttState = (id, user) => `<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify({ __DEFAULT_SCOPE__: { 'webapp.video-detail': { itemInfo: { itemStruct: { id, desc: 'v' + id + ' #tag', author: { uniqueId: user }, createTime: 1700000000, stats: { playCount: 10 }, video: { duration: 5, cover: 'https://c/' + id + '.jpg', downloadAddr: 'https://v16.tiktokcdn.com/' + id + '.mp4' } } } } } })}</script>`;
+  await load('https://www.tiktok.com/@chef', `
+    <div id="side"><a href="/@7189418113942979589/video/9001"><img alt="stranger" src="https://x/s.jpg"></a><a href="/@someone/video/9002"><img alt="stranger2" src="https://x/s2.jpg"></a></div>
+    <div data-e2e="user-post-item-list">
+      <div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/111"><img alt="mine1" src="https://x/m1.jpg"></a><strong data-e2e="video-views">1.5K</strong></div>
+      <div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/222"><img alt="mine2" src="https://x/m2.jpg"></a></div>
+    </div>`, ...F, 'content/tiktok.js');
+  const tv2 = await pg.evaluate(async (mkStates) => {
+    AuroraX.sleep = () => Promise.resolve();
+    window.fetch = async (u) => { const id = (u.match(/video\/(\d+)/) || [])[1]; return { ok: true, text: async () => mkStates[id] || '<html></html>' }; };
+    const rows = []; const ctx = { opts: { media: true }, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.tiktok.tasks.videos(ctx);
+    return rows;
+  }, { 111: ttState('111', 'chef'), 222: ttState('222', 'chef') });
+  check('TikTok videos: ONLY the profile grid (side-panel strangers ignored)', tv2.length === 2 && tv2.every((r) => r.author === 'chef') && tv2[0].id === '111');
+  check('TikTok videos: real downloadable mp4 + stats merged in (not just the cover)', tv2[0].media[0].type === 'video' && /111\.mp4/.test(tv2[0].media[0].url) && tv2[0].plays === 10 && /#tag/.test(tv2[0].description));
+
+  await load('https://www.tiktok.com/@chef', `<div data-e2e="inbox-list"><a href="/@fan1">fan1</a><p>replied to your comment: nice</p></div>`, ...F, 'content/tiktok.js');
+  const noGrid = await pg.evaluate(async () => { const rows = []; const ctx = { opts: {}, limit: 5, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit() {} }; try { await AuroraX.platforms.tiktok.tasks.videos(ctx); return 'no error'; } catch (e) { return e.message; } });
+  check('TikTok videos: no grid on the page → clear error, never scrapes the whole page', /find the video grid/.test(noGrid));
+
+  await load('https://www.tiktok.com/@chef', `
+    <div data-e2e="inbox"><a href="/@fan1">fan1</a><p>replied to your comment: Soy black pero</p><a href="/@fan2">fan2</a><p>Dejablackaf Drole and 2 others</p></div>
+    <h2><span data-e2e="followers"><strong data-e2e="followers-count">12</strong> Followers</span></h2><div id="host"></div>`, ...F, 'content/tiktok.js');
+  const flw = await pg.evaluate(async () => {
+    AuroraX.sleep = () => new Promise((r) => setTimeout(r, 5));
+    document.querySelector('[data-e2e="followers"]').addEventListener('click', () => { document.getElementById('host').innerHTML = '<div data-e2e="follow-info-popup"><div role="tab" aria-selected="true">Followers 2</div><ul><li><a href="/@ann"><img src="https://x/a.jpg"></a><div><p>ann</p><p>Ann Lee</p></div></li><li><a href="/@bo"></a><div><p>bo</p><p>Bo B</p></div></li></ul></div>'; });
+    const rows = []; const ctx = { opts: {}, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.tiktok.tasks.followers(ctx);
+    return rows;
+  });
+  check('TikTok followers: opens the popup itself and reads ONLY its profiles (inbox comments ignored)', flw.length === 2 && flw[0].username === 'ann' && flw[0].name === 'Ann Lee' && flw[1].username === 'bo' && flw.every((r) => r.list === 'followers'));
+  const noPop = await pg.evaluate(async () => { document.getElementById('host').innerHTML = ''; document.querySelector('[data-e2e="followers-count"]').remove(); const ctx = { opts: {}, limit: 5, stopped: () => false, count: () => 0, pause: () => Promise.resolve(), log() {}, progress() {}, emit() {} }; try { await AuroraX.platforms.tiktok.tasks.followers(ctx); return 'no error'; } catch (e) { return e.message; } });
+  check('TikTok followers: popup unavailable → clear error, no junk rows', /Couldn't open the followers list/.test(noPop));
+
+  await load('https://www.tiktok.com/@chef/video/222', ttState('111', 'chef'), ...F, 'content/tiktok.js');
+  const stale = await pg.evaluate(async (fresh) => {
+    window.fetch = async () => ({ ok: true, text: async () => fresh });
+    const rows = []; const ctx = { opts: {}, limit: 5, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { rows.push(r); return 1; } };
+    await AuroraX.platforms.tiktok.tasks.video(ctx); return rows;
+  }, ttState('222', 'chef'));
+  check('TikTok video: stale embedded data (SPA navigation) is refreshed, correct video returned', stale.length === 1 && stale[0].id === '222');
+
+  // ---- instagram: grid ignores suggestions/side panels; dialog must be the right one
+  await load('https://www.instagram.com/shop/', `<main><a href="/p/MINE1/"><img alt="m" src="https://x/1.jpg"></a><a href="/reel/MINE2/"><img alt="m" src="https://x/2.jpg"></a></main><aside><a href="/p/SUGG/"><img alt="s" src="https://x/3.jpg"></a></aside><div role="dialog"><a href="/p/POP/"></a></div>`, ...F, 'content/instagram.js');
+  const igGrid = await pg.evaluate(async () => { const rows = []; const ctx = { opts: { media: false }, limit: 20, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } }; await AuroraX.platforms.instagram.tasks.hashtag(ctx); return rows.map((r) => r.url.split('/').filter(Boolean).pop()); });
+  check('IG grid: only the main content (sidebar suggestions and pop-ups ignored)', igGrid.join() === 'MINE1,MINE2');
+  await load('https://www.instagram.com/shop/', `<a href="/shop/followers/">x</a><div role="dialog"><h1>Notifications</h1><a href="/zed/">zed</a></div>`, ...F, 'content/instagram.js');
+  const wrongDlg = await pg.evaluate(async () => { const ctx = { opts: {}, limit: 5, stopped: () => false, count: () => 0, pause: () => Promise.resolve(), log() {}, progress() {}, emit() {} }; window.fetch = async () => { throw new Error('offline'); }; try { await AuroraX.platforms.instagram.tasks.followers(ctx); return 'no error'; } catch (e) { return e.message; } });
+  check('IG followers: a different pop-up is never scraped as the list', /Couldn't read the followers list/.test(wrongDlg));
+
   // ---- instagram: API failure → page-reading fallback, reels resolve to real video files
   await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/thumb1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/thumb2.jpg"></a>`, ...F, 'content/instagram.js');
   const fb = await pg.evaluate(async () => {
@@ -159,11 +211,11 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
 
   // ---- instagram: following list via the profile link + dialog (no API needed)
   await load('https://www.instagram.com/shop/', `<header><ul><li><a href="/shop/followers/">1 followers</a></li><li><a href="/shop/following/" id="fl">2 following</a></li></ul></header><div id="host"></div>
-    <script>document.getElementById('fl').addEventListener('click',e=>{e.preventDefault();document.getElementById('host').innerHTML='<div role="dialog"><div style="overflow-y:auto;height:100px"><div><div><div><a href="/ann/"><img src="https://x/a.jpg"></a><a href="/ann/">ann</a><span>Ann Lee</span></div></div></div><div><div><div><a href="/bo/">bo</a><span>Bo</span></div></div></div></div></div>'});</script>`, ...F, 'content/instagram.js');
+    <script>document.getElementById('fl').addEventListener('click',e=>{e.preventDefault();document.getElementById('host').innerHTML='<div role="dialog"><h1>Following</h1><div style="overflow-y:auto;height:100px"><div><div><div><a href="/ann/"><img src="https://x/a.jpg"></a><a href="/ann/">ann</a><span>Ann Lee</span></div></div></div><div><div><div><a href="/bo/">bo</a><span>Bo</span></div></div></div></div></div>'});</script>`, ...F, 'content/instagram.js');
   await pg.evaluate(() => document.getElementById('fl').dispatchEvent(new Event('x')));
   const fl = await pg.evaluate(async () => {
     // inline scripts don't run under setContent route; wire the click handler here
-    document.getElementById('fl').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('host').innerHTML = '<div role="dialog"><div style="overflow-y:auto;height:100px"><div><div><div><a href="/ann/"><img src="https://x/a.jpg"></a><a href="/ann/">ann</a><span>Ann Lee</span></div></div></div><div><div><div><a href="/bo/">bo</a><span>Bo</span></div></div></div></div></div>'; });
+    document.getElementById('fl').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('host').innerHTML = '<div role="dialog"><h1>Following</h1><div style="overflow-y:auto;height:100px"><div><div><div><a href="/ann/"><img src="https://x/a.jpg"></a><a href="/ann/">ann</a><span>Ann Lee</span></div></div></div><div><div><div><a href="/bo/">bo</a><span>Bo</span></div></div></div></div></div>'; });
     const rows = []; const ctx = { opts: {}, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
     window.fetch = async () => { throw new Error('API must not be needed'); };
     await AuroraX.platforms.instagram.tasks.following(ctx);
