@@ -75,7 +75,7 @@
 
   /* ---------- tasks ---------- */
   async function fetchProfile(username) {
-    const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H);
+    const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, { retries: 1, wait: 8000 });
     if (!j.data || !j.data.user) throw new Error('Profile not found or not visible to your account.');
     return j.data.user;
   }
@@ -116,31 +116,82 @@
     }
   }
 
+  const unesc = (t) => t.replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+  /** Open a post/reel page and pull its real media (video file or full-size photos) — thumbnails in the grid are tiny and never videos. */
+  async function enrichPost(url) {
+    const r = await fetch(url, { credentials: 'include' });
+    if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
+    const html = await r.text();
+    const out = [];
+    for (const m of html.matchAll(/"video_versions":\[\{[^\]]*?"url":"([^"]+)"/g)) out.push({ type: 'video', url: unesc(m[1]) });
+    const og = html.match(/property="og:video(?::secure_url)?" content="([^"]+)"/);
+    if (!out.length && og) out.push({ type: 'video', url: unesc(og[1]) });
+    if (!out.length) {
+      for (const m of html.matchAll(/"display_url":"([^"]+)"/g)) out.push({ type: 'image', url: unesc(m[1]) });
+      const oi = html.match(/property="og:image" content="([^"]+)"/);
+      if (!out.length && oi) out.push({ type: 'image', url: unesc(oi[1]) });
+    }
+    const cap = html.match(/property="og:title" content="([^"]*)"/);
+    return { media: A.dedupeMedia(out).slice(0, 12), caption: cap ? unesc(cap[1]) : '' };
+  }
+
   async function gridDom(ctx, tag) {
     const seen = new Set();
+    const wantMedia = ctx.opts.media !== false;
+    let fails = 0;
     await A.scrollCollect(ctx, () => {
-      let added = 0;
+      const fresh = [];
       for (const a of A.qa('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]')) {
         const url = A.abs(a.getAttribute('href')).split('?')[0];
         if (seen.has(url)) continue; seen.add(url);
         const img = A.q('img', a);
-        added += ctx.emit({ id: url, url, ...(tag ? { hashtag: '#' + tag } : { author: currentUser() }), type: /\/reel\//.test(url) ? 'reel' : 'post', caption: img ? img.alt : '', media: img ? [{ type: 'image', url: img.src }] : [] });
+        fresh.push({ id: url, url, ...(tag ? { hashtag: '#' + tag } : { author: currentUser() }), type: /\/(reel|tv)\//.test(url) ? 'reel' : 'post', caption: img ? img.alt : '', thumb: img ? img.src : '', media: img ? [{ type: 'image', url: img.src }] : [] });
       }
-      ctx.progress(); return added;
-    });
+      return fresh;
+    }, { async: true, process: async (fresh) => {
+      let added = 0;
+      for (const row of fresh) {
+        if (ctx.stopped() || ctx.count() >= ctx.limit) break;
+        if (wantMedia && fails < 3) {
+          try { const e = await enrichPost(row.url); if (e.media.length) row.media = e.media; if (e.caption && !row.caption) row.caption = e.caption; if (row.type === 'reel' && !e.media.some((m) => m.type === 'video')) ctx.log('warn', 'no video file found for a reel', row.url.replace(/\/reel\/[^/]+/, '/reel/<code>')); fails = 0; }
+          catch (err) { fails++; ctx.log('warn', 'could not load post media: ' + err.message, fails >= 3 ? 'giving up on media for this run — thumbnails only' : ''); }
+          await ctx.pause();
+        }
+        added += ctx.emit(row);
+        ctx.progress();
+      }
+      return added;
+    } });
   }
   async function posts(ctx) {
     const user = currentUser();
     await withFallback(ctx, 'posts', () => paged(ctx, (t) => `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(user)}/username/?count=12${t ? '&max_id=' + t : ''}`, (j) => j.items, mapPost), () => gridDom(ctx));
   }
 
-  async function userId() { return (await fetchProfile(currentUser())).id; }
+  function idFromPage() {
+    for (const sc of A.qa('script')) {
+      const t = sc.textContent || '';
+      if (t.length < 100) continue;
+      const m = t.match(/"(?:profile_id|target_id)":"(\d{5,})"/);
+      if (m) return m[1];
+    }
+    return null;
+  }
+  async function userId() { return idFromPage() || (await fetchProfile(currentUser())).id; }
   const RESERVED_HANDLE = /^(p|reel|reels|tv|explore|accounts|direct|stories|about|legal|web)$/i;
+  function findListLink(which) {
+    const re = new RegExp('/' + which + '/?$');
+    return A.qa('a[href]').find((a) => re.test(a.getAttribute('href') || '')) || A.qa('header a, header li, main header *').find((e) => new RegExp('\\b' + which + '\\b', 'i').test(A.txt(e)) && A.txt(e).length < 30 && (e.tagName === 'A' || e.closest('a')));
+  }
   async function listDom(ctx, which) {
-    const link = A.q(`a[href$="/${which}/"]`);
-    if (link && !A.q('[role="dialog"]')) { link.click(); await A.sleep(1800); }
-    const dlg = A.q('[role="dialog"]');
-    if (!dlg) throw new Error(`Open the ${which} list on the profile first (click "${which}"), then press Start again.`);
+    let dlg = A.q('[role="dialog"]');
+    if (!dlg) {
+      const link = findListLink(which);
+      ctx.log('info', `${which}: link ${link ? 'found' : 'NOT found'}`, link ? '' : 'follow-ish hrefs: ' + A.qa('a[href*="follow"]').slice(0, 8).map((a) => a.getAttribute('href').replace(/^\/[^/]+/, '/<user>')).join(' , '));
+      if (link) { (link.closest('a') || link).click(); for (let i = 0; i < 20 && !dlg; i++) { await A.sleep(300); dlg = A.q('[role="dialog"]'); } }
+    }
+    if (!dlg) throw new Error(`Couldn't open the ${which} list. Click "${which}" on the profile yourself so the list pops up, then press Start again.`);
+    ctx.log('info', `${which}: dialog open`);
     const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
     const seen = new Set();
     await A.scrollCollect(ctx, () => {
@@ -148,15 +199,18 @@
       for (const a of A.qa('a[href^="/"]', dlg)) {
         const m = (a.getAttribute('href') || '').match(/^\/([\w.]+)\/?$/);
         if (!m || RESERVED_HANDLE.test(m[1]) || seen.has(m[1])) continue; seen.add(m[1]);
-        const row = a.closest('div[class]') && a.parentElement.parentElement.parentElement || a;
-        const lines = (row.innerText || '').split('\n').map((x) => x.trim()).filter((x) => x && x !== m[1] && !/^(follow|following|remove|verified)$/i.test(x));
+        const row = a.parentElement.parentElement.parentElement || a;
+        const lines = (row.innerText || '').split('\n').map((x) => x.trim()).filter((x) => x && x !== m[1] && !/^(follow|following|remove|verified|message)$/i.test(x));
         added += ctx.emit({ id: m[1], username: m[1], name: lines[0] || '', profileUrl: 'https://www.instagram.com/' + m[1] + '/', avatar: (A.q('img', row) || {}).src || '' });
       }
       ctx.progress(); return added;
     }, { container: box, patience: 6 });
   }
   const listTask = (which) => async (ctx) => {
-    await withFallback(ctx, which, async () => { const id = await userId(); await paged(ctx, (t) => `https://www.instagram.com/api/v1/friendships/${id}/${which}/?count=50${t ? '&max_id=' + t : ''}`, (j) => j.users, mapUserBrief); }, () => listDom(ctx, which));
+    try { await listDom(ctx, which); if (ctx.count() > 0 || ctx.stopped()) return; ctx.log('warn', which + ': dialog gave no rows — trying the API'); }
+    catch (e) { if (ctx.count() > 0) throw e; ctx.log('warn', which + ': ' + e.message + ' — trying the API'); }
+    try { const id = await userId(); await paged(ctx, (t) => `https://www.instagram.com/api/v1/friendships/${id}/${which}/?count=50${t ? '&max_id=' + t : ''}`, (j) => j.users, mapUserBrief); }
+    catch (e) { throw new Error(`Couldn't read the ${which} list (${e.message}). Click "${which}" on the profile so the list pops up, then press Start again.`); }
   };
 
   function mediaIdHere() { const m = location.pathname.match(/\/(?:p|reel|tv)\/([^/]+)/); return m ? { code: m[1], id: shortcodeToId(m[1]) } : null; }

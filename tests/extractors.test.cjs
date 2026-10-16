@@ -99,20 +99,40 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const tc = await run('tiktok', 'comments');
   check('TikTok comments: author, text, likes (1.2K), time', tc.length === 2 && tc[0].author === 'fan1' && tc[0].likes === 1200 && tc[0].postedAt === '2d' && /Love it/.test(tc[0].text));
 
-  // ---- instagram: API failure → page-reading fallback, with log trail
-  await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/2.jpg"></a>
-    <a href="/shop/followers/">followers</a>`, ...F, 'content/instagram.js');
+  // ---- instagram: API failure → page-reading fallback, reels resolve to real video files
+  await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/thumb1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/thumb2.jpg"></a>`, ...F, 'content/instagram.js');
   const fb = await pg.evaluate(async () => {
     AuroraX.sleep = () => Promise.resolve();
     const logs = []; AuroraX.log = (l, m, d) => logs.push(l + ':' + m + ':' + (d || ''));
-    let calls = 0; window.fetch = async () => { calls++; return { ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) }; };
-    const rows = []; const ctx = { opts: {}, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: AuroraX.log, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    const hdr = { get: () => null };
+    window.fetch = async (u) => {
+      if (/\/api\/v1\//.test(u)) return { ok: false, status: 429, headers: hdr, json: async () => ({}) };
+      if (/reel\/BBB/.test(u)) return { ok: true, text: async () => '..."video_versions":[{"type":101,"url":"https:\\/\\/v.cdn\\/reel.mp4?a=1\\u0026b=2","width":720}],"display_url":"https:\\/\\/x\\/full.jpg"...' };
+      return { ok: true, text: async () => '"display_url":"https:\\/\\/x\\/full1.jpg","display_url":"https:\\/\\/x\\/full2.jpg"' };
+    };
+    const rows = []; const ctx = { opts: { media: true }, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: AuroraX.log, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
     await AuroraX.platforms.instagram.tasks.posts(ctx);
-    return { rows, calls, logs };
+    return { rows, logs };
   });
-  check('IG posts: HTTP 429 is retried then falls back to reading the grid', fb.calls === 3 && fb.rows.length === 2 && fb.rows[1].type === 'reel' && fb.logs.some((l) => /HTTP 429/.test(l)) && fb.logs.some((l) => /reading the page instead/.test(l)));
+  check('IG posts: 429 is retried then falls back to reading the grid', fb.rows.length === 2 && fb.logs.some((l) => /HTTP 429/.test(l)) && fb.logs.some((l) => /reading the page instead/.test(l)));
+  check('IG reel resolves to the real .mp4 (not the thumbnail), unescaped', fb.rows[1].media[0].type === 'video' && fb.rows[1].media[0].url === 'https://v.cdn/reel.mp4?a=1&b=2');
+  check('IG photo resolves to full-size images (carousel aware)', fb.rows[0].media.length === 2 && fb.rows[0].media[0].url === 'https://x/full1.jpg');
+
+  // ---- instagram: following list via the profile link + dialog (no API needed)
+  await load('https://www.instagram.com/shop/', `<header><ul><li><a href="/shop/followers/">1 followers</a></li><li><a href="/shop/following/" id="fl">2 following</a></li></ul></header><div id="host"></div>
+    <script>document.getElementById('fl').addEventListener('click',e=>{e.preventDefault();document.getElementById('host').innerHTML='<div role="dialog"><div style="overflow-y:auto;height:100px"><div><div><div><a href="/ann/"><img src="https://x/a.jpg"></a><a href="/ann/">ann</a><span>Ann Lee</span></div></div></div><div><div><div><a href="/bo/">bo</a><span>Bo</span></div></div></div></div></div>'});</script>`, ...F, 'content/instagram.js');
+  await pg.evaluate(() => document.getElementById('fl').dispatchEvent(new Event('x')));
+  const fl = await pg.evaluate(async () => {
+    // inline scripts don't run under setContent route; wire the click handler here
+    document.getElementById('fl').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('host').innerHTML = '<div role="dialog"><div style="overflow-y:auto;height:100px"><div><div><div><a href="/ann/"><img src="https://x/a.jpg"></a><a href="/ann/">ann</a><span>Ann Lee</span></div></div></div><div><div><div><a href="/bo/">bo</a><span>Bo</span></div></div></div></div></div>'; });
+    const rows = []; const ctx = { opts: {}, limit: 50, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    window.fetch = async () => { throw new Error('API must not be needed'); };
+    await AuroraX.platforms.instagram.tasks.following(ctx);
+    return rows;
+  });
+  check('IG following: clicks the link, reads the dialog, no API call', fl.length === 2 && fl[0].username === 'ann' && fl[1].username === 'bo');
   const sn = await pg.evaluate(() => AuroraX.snapshot());
-  check('page probe is structure-only (counts, no text)', sn.counts['a[/p/]'] === 1 && sn.counts['a[/reel/]'] === 1 && !/shop/.test(JSON.stringify(sn.path)) === false || sn.counts['a[/p/]'] === 1);
+  check('page probe is structure-only (counts, no text)', typeof sn.counts['role=dialog'] === 'number' && !JSON.stringify(sn).includes('Ann Lee'));
 
   await browser.close(); done();
 })().catch((e) => { console.error(e); process.exit(1); });

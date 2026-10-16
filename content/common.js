@@ -42,10 +42,10 @@
    * pull() returns the number of NEW rows it emitted. Stops at limit, when nothing new
    * arrives for `patience` rounds, or when ctx.stopped().
    */
-  A.scrollCollect = async function (ctx, pull, { container, patience = 5 } = {}) {
+  A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process } = {}) {
     let idle = 0;
     while (!ctx.stopped()) {
-      const added = pull();
+      const added = isAsync ? await process(pull()) : pull();
       if (ctx.count() >= ctx.limit) break;
       idle = added > 0 ? 0 : idle + 1;
       if (idle >= patience) break;
