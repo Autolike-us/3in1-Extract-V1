@@ -36,6 +36,9 @@ npm test && npm run test:ui
 npm run package      # dist/aurora-extract-<version>.zip
 ```
 
+## Chrome Web Store
+`store/LISTING.md` has everything to paste into the Developer Dashboard (listing text, single purpose, permission justifications, privacy answers, reviewer test steps, checklist). `node store/make-assets.cjs` regenerates the screenshots from the real dashboard with fictional sample data.
+
 ## Principles
 Only data the logged-in user can already see · paced requests (Gentle / Normal / Fast) · local storage only ·
 public contact details only · user is responsible for platform terms and privacy / marketing law.
