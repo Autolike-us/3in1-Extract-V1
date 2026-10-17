@@ -143,7 +143,7 @@
     el.innerHTML = `
       <div class="ring" style="--p:${pct}"><b>${(r.count || 0).toLocaleString()}</b></div>
       <div><h3>${live ? (r.status === 'paused' ? '⏸ Paused' : 'Collecting…') : r.status === 'error' ? '⚠️ Stopped with a problem' : '✅ Done'} <span class="note">${h(r.label)}</span></h3>
-        <p>${h(r.error || r.note || (live ? 'Scrolling and reading the page. Keep that tab open.' : `${(r.count || 0).toLocaleString()} items saved.`))}</p>${r.warning && !live ? `<p class="warn" style="margin-top:10px">⚠️ ${h(r.warning)}</p>` : ''}<div class="bar"><i></i></div></div>
+        <p>${h(r.error || r.note || (live ? 'Reading the page. Keep that tab in front — Chrome pauses hidden tabs and the site stops loading more.' : `${(r.count || 0).toLocaleString()} items saved.`))}</p>${r.warning && !live ? `<p class="warn" style="margin-top:10px">⚠️ ${h(r.warning)}</p>` : ''}<div class="bar"><i></i></div></div>
       <div class="actions" style="margin:0">
         ${live ? `<button class="btn" data-a="pause">${r.status === 'paused' ? '▶ Resume' : '⏸ Pause'}</button><button class="btn danger" data-a="stop">■ Stop</button>` : `<button class="btn primary" data-a="view">View results</button>${r.status === 'error' || !r.count ? '<button class="btn" data-a="report">🐞 Copy debug report</button><a class="btn" href="' + C.telegram + '" target="_blank" rel="noopener">💬 Telegram</a>' : ''}`}
       </div>`;

@@ -42,6 +42,21 @@
    * pull() returns the number of NEW rows it emitted. Stops at limit, when nothing new
    * arrives for `patience` rounds, or when ctx.stopped().
    */
+  /** Chrome pauses hidden tabs: Facebook, Instagram and TikTok stop loading new content there. Wait until this tab is visible again. */
+  A.waitVisible = async (ctx) => {
+    if (!document.hidden) return false;
+    A.log('warn', 'this tab is in the background — pausing (Chrome stops sites from loading more while a tab is hidden)');
+    ctx.progress('Paused — bring this tab to the front so the site keeps loading');
+    await new Promise((res) => {
+      let t;
+      const f = () => { if (!document.hidden || ctx.stopped()) { document.removeEventListener('visibilitychange', f); clearInterval(t); res(); } };
+      document.addEventListener('visibilitychange', f); t = setInterval(f, 1000);
+    });
+    await A.sleep(1500);
+    A.log('info', 'tab visible again — continuing');
+    return true;
+  };
+
   A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process, nudge } = {}) {
     let idle = 0, scroller = container || null, logged = 0;
     const de = () => document.scrollingElement || document.documentElement;
@@ -57,6 +72,7 @@
       return best;
     };
     while (!ctx.stopped()) {
+      await A.waitVisible(ctx);
       const added = isAsync ? await process(pull()) : pull();
       if (ctx.count() >= ctx.limit) break;
       idle = added > 0 ? 0 : idle + 1;
@@ -70,7 +86,7 @@
         else if (el !== de()) { scroller = null; moved = step(de(), dy); }
       }
       try { if (nudge) nudge(); } catch (_) {}
-      if (logged < 3 || (idle === 3)) { logged++; A.log('info', `scroll: moved=${moved} scroller=${(scroller || de()).tagName.toLowerCase()} top=${Math.round((scroller || de()).scrollTop)}/${(scroller || de()).scrollHeight}`); }
+      if (logged < 3 || (idle === 3)) { logged++; A.log('info', `scroll: hidden=${document.hidden} moved=${moved} scroller=${(scroller || de()).tagName.toLowerCase()} top=${Math.round((scroller || de()).scrollTop)}/${(scroller || de()).scrollHeight}`); }
       await ctx.pause();
     }
   };

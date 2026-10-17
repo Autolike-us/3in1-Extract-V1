@@ -142,7 +142,7 @@
         added += ctx.emit(row);
       }
       pull++;
-      if (pull <= 3 || pull % 5 === 0 || added === 0) log('info', `pull ${pull}: articles=${arts.length} permalinkCards=${cards.length} new=${added} empty=${empty} dup=${dup}`);
+      if (pull <= 3 || pull % 5 === 0 || added === 0) log('info', `pull ${pull}: hidden=${document.hidden} articles=${arts.length} permalinkCards=${cards.length} new=${added} empty=${empty} dup=${dup}`);
       ctx.progress(); return added;
     }, { patience: 8, nudge: () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
     if (ctx.setWarning && missing) ctx.setWarning(`${missing} video post${missing > 1 ? 's' : ''} saved without the video file — Facebook didn't expose it. Reload the page, scroll down once so the videos load, then run again.`);

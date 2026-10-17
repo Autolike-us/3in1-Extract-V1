@@ -202,6 +202,22 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   check('IG likers via API: users with profile links', lk.likers.length === 2 && lk.likers[1].verified === true && lk.likers[0].profileUrl.endsWith('/u1/'));
   check('IG commenters: aggregated per user with profile link', lk.commenters.length === 2 && lk.commenters[0].username === 'zed' && lk.commenters[0].comments === 2 && lk.commenters[0].profileUrl === 'https://www.instagram.com/zed/');
 
+  // ---- background tabs: wait (don't finish early) while hidden, continue when visible; on-page progress badge
+  await load('https://www.facebook.com/WhiteHouse', `<div role="main"><div role="article"><h3><a href="https://www.facebook.com/WhiteHouse">WH</a></h3><a href="https://www.facebook.com/WhiteHouse/posts/1"><span>1h</span></a><div dir="auto">first post</div></div></div>`, ...F, 'content/facebook.js');
+  await pg.evaluate(() => {
+    window.__hidden = true; Object.defineProperty(document, 'hidden', { get: () => window.__hidden, configurable: true });
+    window.__sent = []; window.chrome = { runtime: { sendMessage: (m) => { window.__sent.push(m); }, onMessage: { addListener: (f) => { window.__listener = f; } } } };
+  });
+  await pg.addScriptTag({ content: read('content/boot.js') });
+  await pg.evaluate(() => new Promise((r) => window.__listener({ aurora: true, type: 'start', runId: 'r1', kind: 'posts', opts: { limit: 5, delayMs: 250 } }, null, r)));
+  await pg.waitForTimeout(1200);
+  const mid = await pg.evaluate(() => ({ done: window.__sent.some((m) => m.type === 'done'), warned: window.__sent.some((m) => m.type === 'log' && /background/.test(m.entry.m)), badge: (document.getElementById('aurora-extract-badge') || {}).shadowRoot && document.getElementById('aurora-extract-badge').shadowRoot.textContent }));
+  check('hidden tab: the run waits (does not finish early), logs why, and shows a progress badge on the page', !mid.done && mid.warned && /Aurora Extract|Starting|collected/.test(mid.badge || ''));
+  await pg.evaluate(() => { window.__hidden = false; document.dispatchEvent(new Event('visibilitychange')); });
+  await pg.waitForFunction(() => window.__sent.some((m) => m.type === 'done'), null, { timeout: 60000 });
+  const end = await pg.evaluate(() => ({ done: window.__sent.find((m) => m.type === 'done'), rows: window.__sent.filter((m) => m.type === 'rows').flatMap((m) => m.rows).length, badge: document.getElementById('aurora-extract-badge').shadowRoot.textContent }));
+  check('once the tab is visible again the run continues, collects the post and the badge offers "View results"', end.done.count === 1 && end.rows === 1 && /Done/.test(end.badge) && /View results/.test(end.badge));
+
   // ---- facebook: feed that only grows when an INNER container scrolls (window doesn't) + video posts
   await load('https://www.facebook.com/profile.php?id=1', `<style>html,body{overflow:hidden;height:100%;margin:0}#sc{height:500px;overflow-y:auto}</style><div id="sc"><div role="main" id="feed"></div></div>
     <script id="d" type="application/json">{"__bbox":{"result":{"data":{"video":{"id":"5550001","playable_url":"https:\\/\\/video.fbcdn.net\\/sd.mp4?x=1\\u0026y=2","browser_native_hd_url":"https:\\/\\/video.fbcdn.net\\/hd.mp4?x=1\\u0026y=2"}}}}}</script>`, ...F, 'content/facebook.js');
