@@ -57,7 +57,7 @@
     return true;
   };
 
-  A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process, nudge } = {}) {
+  A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process, nudge, slow } = {}) {
     let idle = 0, scroller = container || null, logged = 0;
     const de = () => document.scrollingElement || document.documentElement;
     const step = (el, dy) => { const before = el.scrollTop; el.scrollBy({ top: dy, behavior: 'auto' }); return el.scrollTop !== before; };
@@ -78,8 +78,15 @@
       idle = added > 0 ? 0 : idle + 1;
       if (idle >= patience) break;
       const el = scroller || de();
-      const dy = Math.max(500, (container ? container.clientHeight : innerHeight) * 0.9);
+      // slow mode (Facebook): half a screen at a time, so each post has time to draw before we move on; if nothing new appeared, back up a little and come forward again
+      const dy = slow ? Math.round((container ? container.clientHeight : innerHeight) * 0.5) : Math.max(500, (container ? container.clientHeight : innerHeight) * 0.9);
+      if (slow && idle >= 1) {
+        const up = Math.round(innerHeight * (idle >= 3 ? 1.6 : 0.8));
+        const b0 = el.scrollTop; step(el, -up); const back = b0 - el.scrollTop; await A.sleep(900 + Math.random() * 400);
+        if (back > 0) step(el, back); await A.sleep(700 + Math.random() * 300);
+      }
       let moved = step(el, dy);
+      if (slow) await A.sleep(1100 + Math.random() * 500);
       if (!moved && !container) {
         const alt = findScroller();
         if (alt && alt !== el) { scroller = alt; moved = step(alt, dy); }
@@ -136,10 +143,10 @@
   };
 
   /** Aurora Audit: read the profile and the latest posts with the platform's own tasks, then score them locally. */
-  A.runAudit = async function (ctx, { platform, profile, posts, nPosts, media, ready }) {
-    const grab = (limit, mediaOn) => {
+  A.runAudit = async function (ctx, { platform, profile, posts, nPosts, media, ready, slow }) {
+    const grab = (limit, mediaOn, slowOn) => {
       const rows = [], p = Object.create(ctx);
-      p.limit = limit; p.opts = Object.assign({}, ctx.opts, { limit, media: mediaOn });
+      p.limit = limit; p.opts = Object.assign({}, ctx.opts, { limit, media: mediaOn, slow: !!slowOn });
       p.count = () => rows.length;
       p.emit = (r) => { for (const x of [].concat(r)) if (x && rows.length < limit) rows.push(x); return 1; };
       p.progress = (note) => ctx.progress(note || '', Math.min(rows.length, limit));
@@ -155,7 +162,7 @@
     let list = [], postNote = '';
     if (!ctx.stopped() && posts) {
       ctx.progress('Reading the latest posts…');
-      const b = grab(nPosts, media);
+      const b = grab(nPosts, media, slow);
       try { await posts(b.p); } catch (e) { postNote = 'Posts could not be read: ' + String((e && e.message) || e).slice(0, 140); ctx.log('warn', 'audit: ' + postNote); }
       list = b.rows;
     }

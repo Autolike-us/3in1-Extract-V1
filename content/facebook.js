@@ -118,6 +118,14 @@
     const times = A.qa('a[href] , a[aria-label], a[role="link"] span', art).filter((e) => e.tagName !== 'A' || POST_HREF.test(e.getAttribute('href') || '') || e.hasAttribute('aria-label')).map((e) => e.getAttribute('aria-label') || A.txt(e)).filter((t) => /^(\d+\s?[smhdwy]|just now|yesterday|\w+ \d{1,2}(, \d{4})?|\d+ (sec|min|hour|day|week|month|year))/i.test(t));
     const reactions = A.q('[aria-label*="reaction" i], [aria-label*="like" i]', art);
     const text2 = A.txt(art);
+    /* newer layouts show the count as its own line ("All reactions:" / "1.2K") just before "34 comments" */
+    const lines = (art.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const reactLine = (() => {
+      const k = lines.findIndex((l) => /^all reactions:?$/i.test(l)); if (k >= 0 && /^[\d.,]+\s?[KkMm]?$/.test(lines[k + 1] || '')) return lines[k + 1];
+      const ci = lines.findIndex((l) => /^[\d.,]+\s?[KkMm]?\s+comments?$/i.test(l));
+      for (let i = ci - 1; ci > 0 && i >= Math.max(0, ci - 3); i--) if (/^[\d.,]+\s?[KkMm]?$/.test(lines[i])) return lines[i];
+      return '';
+    })();
     const numAfter = (re) => { const m = text2.match(re); return m ? A.parseCount(m[1]) : null; };
     const media = A.dedupeMedia([
       ...A.mediaFromImgs(art, 200),
@@ -133,7 +141,7 @@
       _diag: diag, id: url || undefined, url, ...(vids.length ? { videoIds: vids } : {}), ...(videoMissing ? { videoMissing: true } : {}),
       author: A.txt(authorEl), authorUrl: authorEl ? A.abs(authorEl.href.split('?')[0]) : '',
       text, postedAt: times[0] || '',
-      reactions: reactions ? A.parseCount(reactions.getAttribute('aria-label')) || A.parseCount(A.txt(reactions)) : null,
+      reactions: reactions ? A.parseCount(reactions.getAttribute('aria-label')) || A.parseCount(A.txt(reactions)) || (reactLine ? A.parseCount(reactLine) : null) : (reactLine ? A.parseCount(reactLine) : null),
       comments: numAfter(/([\d.,KkMm]+)\s+comments?/i), shares: numAfter(/([\d.,KkMm]+)\s+shares?/i),
       emailsInText: c.emails, phonesInText: c.phones, media,
     };
@@ -162,16 +170,17 @@
   }
 
   async function posts(ctx) {
-    const seen = new Set();
+    const seen = new Set(), retry = {};
     let pull = 0, missing = 0, fails = 0;
     const log = (...a) => ctx.log && ctx.log(...a);
     const wantMedia = ctx.opts.media !== false;
+    const slow = !!ctx.opts.slow;
     const lastArticle = () => { const l = articleList(); return l[l.length - 1]; };
     scanScripts();
     log('info', `video addresses known at start: ${Object.keys(VIDEOS).length}`);
     await A.scrollCollect(ctx, () => {
       scanScripts();
-      let empty = 0, dup = 0;
+      let empty = 0, dup = 0, late = 0;
       const fresh = [];
       const arts = articleList();
       const cards = arts.length < 3 ? permalinkCards() : [];
@@ -180,11 +189,13 @@
         const key = row.url || (row.author + row.text.slice(0, 60));
         if (!row.url && !row.text && !row.media.length) { empty++; continue; }
         if (seen.has(key)) { dup++; continue; }
+        // slow mode: a post that has not drawn its numbers yet gets two more looks before we accept it as it is
+        if (slow && row.reactions == null && row.comments == null && (retry[key] = (retry[key] || 0) + 1) <= 2) { late++; continue; }
         seen.add(key);
         fresh.push(row);
       }
       pull++;
-      if (pull <= 3 || pull % 5 === 0 || !fresh.length) log('info', `pull ${pull}: hidden=${document.hidden} articles=${arts.length} permalinkCards=${cards.length} new=${fresh.length} empty=${empty} dup=${dup}`);
+      if (pull <= 3 || pull % 5 === 0 || !fresh.length) log('info', `pull ${pull}: hidden=${document.hidden} articles=${arts.length} permalinkCards=${cards.length} new=${fresh.length} empty=${empty} dup=${dup}${slow ? ' late=' + late : ''}`);
       return fresh;
     }, { async: true, process: async (fresh) => {
       let added = 0;
@@ -204,7 +215,7 @@
         added += ctx.emit(row);
       }
       ctx.progress(); return added;
-    }, patience: 8, nudge: () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
+    }, patience: slow ? 6 : 8, slow, nudge: slow ? null : () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
     if (ctx.setWarning && missing) ctx.setWarning(`${missing} video post${missing > 1 ? 's' : ''} saved without the video file — Facebook didn't expose it. Reload the page, scroll down once so the videos load, then run again.`);
   }
 
@@ -384,7 +395,7 @@
     ctx.emit({ id: location.pathname.split('/')[2], name, url: location.href.split('?')[0], members: A.parseCount(members), privacy, activity: posts, about: (A.meta('og:description') || '').slice(0, 600), media: A.meta('og:image') ? [{ type: 'image', url: A.meta('og:image') }] : [] });
   }
 
-  async function audit(ctx) { await A.runAudit(ctx, { platform: 'facebook', profile: pageInfo, posts, nPosts: 20, media: false, ready: () => { const m = A.q('[role="main"]') || document.body, t = m.innerText || ''; return !!A.q('h1') && t.length > 250 && /follower|like|people follow this|About|Posts/i.test(t); } }); }
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'facebook', profile: pageInfo, posts, nPosts: 20, media: false, slow: true, ready: () => { const m = A.q('[role="main"]') || document.body, t = m.innerText || ''; return !!A.q('h1') && t.length > 250 && /follower|like|people follow this|About|Posts/i.test(t); } }); }
 
   A.register('facebook', {
     name: 'Facebook', hosts: /(^|\.)facebook\.com$/, detect,

@@ -103,6 +103,24 @@ const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
   const fbr = await pg.evaluate(async (m) => { const { ctx, rows } = eval(m); ctx.limit = 20; await AuroraX.platforms.facebook.tasks.audit(ctx); return rows; }, mk);
   check('Facebook audit: report built from the page details and the posts on screen', fbr.length === 1 && fbr[0].name === 'Acme Café' && fbr[0].audit.stats.postsAnalysed >= 2 && fbr[0].audit.sections.find((s) => s.id === 'contact').score > 10, JSON.stringify(fbr[0] && fbr[0].audit && fbr[0].audit.stats));
   check('Facebook audit offers itself on page/profile pages', await pg.evaluate(() => AuroraX.platforms.facebook.detect(new URL('https://www.facebook.com/acme.cafe')).kinds.some((k) => k.id === 'audit')));
+  // Facebook: counts shown as their own lines ("All reactions:" / "1.2K" / "34 comments")
+  await pg.unroute('**/*');
+  await pg.route('**/*', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>t</title><body><div role="article"><h3><a href="https://www.facebook.com/acme.cafe">Acme</a></h3><a href="https://www.facebook.com/acme.cafe/posts/301"><span>3d</span></a><div dir="auto">Big news today</div><div>All reactions:</div><div>1.2K</div><div>34 comments</div><div>5 shares</div></div><div role="article"><a href="https://www.facebook.com/acme.cafe/posts/302"><span>4d</span></a><div dir="auto">Another one</div><div>87</div><div>12 comments</div></div></body>' }));
+  await pg.goto('https://www.facebook.com/acme.cafe'); await pg.evaluate(stub);
+  for (const f of ['content/common.js', 'core/audit.js', 'content/facebook.js']) await pg.addScriptTag({ content: read(f) });
+  const fbn = await pg.evaluate(() => Array.from(document.querySelectorAll('[role=article]')).map((a) => { const r = AuroraX.platforms.facebook._test.parsePost(a); return { reactions: r.reactions, comments: r.comments, shares: r.shares }; }));
+  check('Facebook post counts are read when shown as separate lines (1.2K reactions, 34 comments, 5 shares)', fbn[0].reactions === 1200 && fbn[0].comments === 34 && fbn[0].shares === 5 && fbn[1].reactions === 87 && fbn[1].comments === 12, JSON.stringify(fbn));
+  // slow scrolling: half a screen at a time and a back-up when nothing new draws — never a jump to the bottom
+  const sc = await pg.evaluate(async () => {
+    document.body.innerHTML = '<div style="height:12000px"></div>'; window.scrollTo(0, 0);
+    const ys = []; const ctx = { stopped: () => false, count: () => 0, limit: 99, pause: () => new Promise((r) => setTimeout(r, 5)), log() {} };
+    let n = 0; const t0 = Date.now();
+    await AuroraX.scrollCollect(ctx, () => { ys.push(Math.round(scrollY)); return n++ < 0 ? 1 : 0; }, { patience: 4, slow: true });
+    return { ys, secs: (Date.now() - t0) / 1000, vh: innerHeight };
+  });
+  const maxJump = Math.max.apply(null, sc.ys.slice(1).map((y, i) => Math.abs(y - sc.ys[i])));
+  console.log('scroll positions', JSON.stringify(sc));
+  check('slow scrolling never jumps more than a screen at a time and takes its time', sc.ys.length >= 4 && maxJump <= sc.vh && sc.secs >= 3);
   const st = await pg.evaluate(async (m) => { const { ctx } = eval(m); const t0 = Date.now(); const no = await AuroraX.settle(ctx, () => false, { timeout: 500, quiet: 10 }); const waited = Date.now() - t0; const yes = await AuroraX.settle(ctx, () => true, { timeout: 500, quiet: 10 }); return { no, yes, waited }; }, mk);
   check('settle waits for the page, then gives up politely (never hangs) and returns at once when ready', st.no === false && st.waited >= 480 && st.waited < 2000 && st.yes === true);
   await browser.close();
