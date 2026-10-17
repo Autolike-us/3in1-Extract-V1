@@ -192,6 +192,7 @@
     const mediaCount = S.rows.reduce((n, r) => n + ((r.media && r.media.length) || 0), 0);
     const emails = new Set(); for (const r of S.rows) for (const k of ['email', 'emails', 'emailsInText']) [].concat(r[k] || []).forEach((e) => e && emails.add(e));
     const hasThumb = S.rows.some((r) => r.media && r.media.some((m) => m.type === 'image'));
+    const hasMedia = S.rows.some((r) => r.media && r.media.length);
     v.innerHTML = `
       <div class="vhead"><h2>${h(run.label)}</h2>
         <button class="btn" data-x="csv">CSV</button><button class="btn" data-x="xlsx">Excel</button><button class="btn" data-x="json">JSON</button><button class="btn" data-x="report" title="Copy a technical report for support">🐞 Debug</button>
@@ -200,8 +201,8 @@
         ${emails.size ? `<button class="btn" data-x="emails">✉ Copy ${emails.size} email${emails.size > 1 ? 's' : ''}</button>` : ''}
         <span style="flex:1"></span><button class="btn danger" data-x="delete">Delete</button></div>
       ${run.warning ? `<div class="warn" style="margin:14px 22px 0">⚠️ ${h(run.warning)}</div>` : ''}
-      ${rows.length ? `<div class="tablewrap"><table><thead><tr>${hasThumb ? '<th></th>' : ''}${cols.map((c) => `<th>${h(nice(c))}</th>`).join('')}</tr></thead><tbody>
-        ${shown.map((r) => `<tr>${hasThumb ? `<td>${thumb(r)}</td>` : ''}${cols.map((c) => cellHtml(r[c], c)).join('')}</tr>`).join('')}</tbody></table></div>
+      ${rows.length ? `<div class="tablewrap"><table><thead><tr>${hasThumb ? '<th></th>' : ''}${hasMedia ? '<th>Media</th>' : ''}${cols.map((c) => `<th>${h(nice(c))}</th>`).join('')}</tr></thead><tbody>
+        ${shown.map((r) => `<tr>${hasThumb ? `<td>${thumb(r)}</td>` : ''}${hasMedia ? `<td>${mediaCell(r)}</td>` : ''}${cols.map((c) => cellHtml(r[c], c)).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="vfoot"><span>Showing ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}</span>${shown.length < rows.length ? '<button class="btn" data-x="more">Show more</button>' : ''}</div>`
       : `<div class="empty-state"><div class="e">${run.status === 'running' ? '⏳' : '🔍'}</div><p>${run.status === 'running' ? 'Waiting for the first results…' : S.q ? 'No rows match your search.' : 'No data was found on that page.'}</p>${run.error ? `<p class="warn">${h(run.error)}</p>` : ''}${run.status !== 'running' ? '<p style="margin-top:14px"><button class="btn primary" data-x="report">🐞 Copy debug report</button></p><p class="note" style="margin-top:8px">Paste it in our <a href="' + C.telegram + '" target="_blank" rel="noopener">Telegram channel</a> and we\'ll fix the extractor for this page.</p>' : ''}</div>`}
       <div class="strip" id="strip" ${S.stripHidden || !rows.length ? 'hidden' : ''}><p>💡 Found the right people? <b>Aurora Studios</b> can like, follow and comment for you — hands-free, with human-like pacing. <a href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=results_strip" target="_blank" rel="noopener">3-day free trial →</a></p><button class="x" data-x="hidestrip" aria-label="Dismiss">✕</button></div>`;
@@ -209,6 +210,14 @@
     v.onclick = (e) => { const b = e.target.closest('[data-x]'); if (b) act(b.dataset.x, run, rows); };
   }
   const nice = (c) => c.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\bUrl\b/i, 'URL').replace(/\bId\b/i, 'ID').replace(/^./, (x) => x.toUpperCase());
+  const mediaCell = (r) => {
+    const ms = r.media || [], v = ms.filter((m) => m.type === 'video'), im = ms.filter((m) => m.type === 'image');
+    const parts = [];
+    if (v.length) parts.push(`<a class="mchip vid" href="${h(v[0].url)}" target="_blank" rel="noopener noreferrer" title="Open the video file">▶ ${v.length} video</a>`);
+    if (im.length) parts.push(`<span class="mchip">🖼 ${im.length} photo${im.length > 1 ? 's' : ''}</span>`);
+    if (r.videoMissing) parts.push('<span class="mchip warn" title="The site did not expose the video file for this post">no video file</span>');
+    return parts.join(' ') || '';
+  };
   const thumb = (r) => { const m = (r.media || []).find((x) => x.type === 'image'); return m ? `<img loading="lazy" referrerpolicy="no-referrer" src="${h(m.url)}" alt="">` : ''; };
   function cellHtml(v, c) {
     if (v == null || v === '') return '<td></td>';
@@ -253,28 +262,38 @@
     for (const r of rows) (r.media || []).forEach((m, i) => items.push({ r, m, i }));
     if (!items.length) return toast('No media in these rows');
     const btn = $('[data-x=media]'); btn.disabled = true;
-    const files = [], index = [['file', 'type', 'source_row', 'url']];
-    let done = 0, bytes = 0, part = 1, failed = 0;
+    const files = [], index = [['file', 'type', 'source_row', 'url']], report = [];
+    let done = 0, bytes = 0, part = 1;
+    const tally = { video: 0, image: 0, failed: 0 };
+    const reasons = {};
     const flush = async (final) => {
-      if (!files.length) return;
+      if (!files.length && !final) return;
       const csv = index.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\r\n');
-      const zip = AuroraZip.makeZip(files.concat([{ name: 'index.csv', data: '﻿' + csv }]));
-      dl(`${base}-media-part${part}.zip`, zip, 'application/zip'); part++; files.length = 0; bytes = 0; index.length = 1;
+      const extra = [{ name: 'index.csv', data: '\ufeff' + csv }];
+      if (final || part === 1) extra.push({ name: 'download-report.txt', data: `Aurora Extract media download report\n${new Date().toISOString()}\nvideos saved: ${tally.video}  photos saved: ${tally.image}  failed: ${tally.failed}\n\n${report.join('\n')}\n` });
+      if (!files.length && !tally.failed) return;
+      dl(`${base}-media-part${part}.zip`, AuroraZip.makeZip(files.concat(extra)), 'application/zip'); part++; files.length = 0; bytes = 0; index.length = 1;
     };
+    const fail = (it, why) => { tally.failed++; reasons[why] = (reasons[why] || 0) + 1; report.push(`FAILED  ${it.m.type.padEnd(5)} ${why}  ${it.m.url.slice(0, 160)}`); };
     const queue = items.slice();
     const worker = async () => {
       while (queue.length) {
         const it = queue.shift();
         try {
-          const res = await fetch(it.m.url, { credentials: /tiktok/.test(it.m.url) ? 'include' : 'omit' });
-          if (!res.ok) throw new Error(res.status);
+          const res = await fetch(it.m.url, { credentials: /tiktok|facebook|fbcdn/.test(it.m.url) ? 'include' : 'omit' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const ct = (res.headers.get('content-type') || '').split(';')[0].trim();
           const buf = new Uint8Array(await res.arrayBuffer());
-          const ext = EXT[(res.headers.get('content-type') || '').split(';')[0]] || (it.m.type === 'video' ? 'mp4' : 'jpg');
+          // a "video" must really be a video: an image, web page or empty body means the link is expired or blocked
+          if (it.m.type === 'video' && (/^(image|text)\//.test(ct) || /json/.test(ct))) throw new Error(`expected video, server sent ${ct}`);
+          if (buf.length < 200) throw new Error(`empty file (${buf.length} bytes)`);
+          const ext = EXT[ct] || (it.m.type === 'video' ? 'mp4' : 'jpg');
           const who = safeName(it.r.author || it.r.username || it.r.name || it.r.title || run.label);
           const name = `${safeName(it.r.platform)}/${who}/${safeName(it.r.id || done)}_${it.i + 1}.${ext}`;
-          files.push({ name, data: buf }); bytes += buf.length;
+          files.push({ name, data: buf }); bytes += buf.length; tally[it.m.type === 'video' ? 'video' : 'image']++;
           index.push([name, it.m.type, it.r.url || it.r.profileUrl || '', it.m.url]);
-        } catch (_) { failed++; }
+          report.push(`ok      ${it.m.type.padEnd(5)} ${ct || '?'}  ${(buf.length / 1024).toFixed(0)} KB  ${name}`);
+        } catch (e) { fail(it, e.message || String(e)); }
         done++; btn.textContent = `⬇ ${done}/${items.length}…`;
         if (bytes > 350 * 1024 * 1024) await flush(false);
       }
@@ -282,7 +301,8 @@
     await Promise.all([worker(), worker(), worker(), worker()]);
     await flush(true);
     btn.disabled = false; btn.textContent = '⬇ Media ZIP';
-    toast(failed ? `Saved media — ${failed} file${failed > 1 ? 's' : ''} could not be fetched (expired links)` : 'Media ZIP saved ✓');
+    const top = Object.entries(reasons).sort((a, b) => b[1] - a[1])[0];
+    toast(`Saved ${tally.video} video${tally.video === 1 ? '' : 's'} + ${tally.image} photo${tally.image === 1 ? '' : 's'}${tally.failed ? ` — ${tally.failed} failed (${top[0]}). See download-report.txt in the ZIP` : ' ✓'}`);
   }
 
   /* ---------- studios tab ---------- */

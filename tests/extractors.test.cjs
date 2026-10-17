@@ -292,7 +292,19 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
     const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 3, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m, d) => logs.push(m + (d ? ' ' + d : '')), setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
     await AuroraX.platforms.facebook.tasks.posts(ctx); return { rows, logs };
   });
-  check('FB video post: opens the post page and saves the real video file (HD)', fbv.rows.length === 1 && fbv.rows[0].media[0].type === 'video' && fbv.rows[0].media[0].url === 'https://v.fbcdn.net/hd.mp4?a=1&b=2' && !fbv.rows[0].videoMissing && fbv.logs.some((l) => /video file found on the post page/.test(l)) && fbv.logs.some((l) => /^video post \{/.test(l)));
+  check('FB video post: opens the post page and saves the real video file (HD)', fbv.rows.length === 1 && fbv.rows[0].media[0].type === 'video' && fbv.rows[0].media[0].url === 'https://v.fbcdn.net/hd.mp4?a=1&b=2' && !fbv.rows[0].videoMissing && fbv.logs.some((l) => /video file found via post page/.test(l)) && fbv.logs.some((l) => /^video post \{/.test(l)));
+
+  // ---- Facebook: post page has nothing, the embed player page has the file (hd_src)
+  await load('https://www.facebook.com/WhiteHouse', `<div role="main"><div role="article"><h3><a href="https://www.facebook.com/WhiteHouse">WH</a></h3><a href="https://www.facebook.com/WhiteHouse/posts/pfbid0zzz"><span>3h</span></a><div dir="auto">clip</div><video></video></div></div>`, ...F, 'content/facebook.js');
+  const emb = await pg.evaluate(async () => {
+    AuroraX.sleep = () => Promise.resolve();
+    window.fetch = async (u) => ({ ok: true, text: async () => (/plugins\/video\.php/.test(u) ? '<html>{"video_id":"123456789012","hd_src":"https:\\/\\/v.fbcdn.net\\/e.mp4?x=1\\u0026y=2","sd_src":"https:\\/\\/v.fbcdn.net\\/e-sd.mp4"}</html>' : '<html>nothing</html>') });
+    const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 3, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m, d) => logs.push(m + (d ? ' ' + d : '')), setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.facebook.tasks.posts(ctx); return { rows, logs };
+  });
+  check('FB video post: falls back to the embed player page (hd_src) and logs each step it tried', emb.rows[0].media[0].url === 'https://v.fbcdn.net/e.mp4?x=1&y=2' && emb.logs.some((l) => /video file found via embed player.*post page: \d+b, 0 file/.test(l)));
+  const none = await pg.evaluate(async () => { window.fetch = async () => ({ ok: true, text: async () => '<html>no video here</html>' }); const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 3, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m, d) => logs.push(m + (d ? ' ' + d : '')), setWarning(w) { logs.push('WARN ' + w); }, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } }; document.querySelectorAll('[role=article]').forEach((a) => a.setAttribute('data-x', '1')); await AuroraX.platforms.facebook.tasks.posts(ctx); return { rows, logs }; });
+  check('FB video post with no file anywhere is flagged videoMissing with a warning and a full trail', none.rows[0].videoMissing === true && none.logs.some((l) => /no video file found post page: \d+b, 0 file\(s\) \| embed player: \d+b, 0 file/.test(l)) && none.logs.some((l) => /^WARN 1 video post/.test(l)));
 
   // ---- instagram: API failure → page-reading fallback, reels resolve to real video files
   await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/thumb1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/thumb2.jpg"></a>`, ...F, 'content/instagram.js');

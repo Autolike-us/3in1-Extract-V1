@@ -174,3 +174,6 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .chip small{opacity:.7}
 
 a.ghost{display:block;text-align:center;text-decoration:none}
+
+.mchip{display:inline-block;font-size:12px;font-weight:700;border-radius:99px;padding:3px 10px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);text-decoration:none;white-space:nowrap}
+.mchip.vid{background:var(--tint);color:var(--accent);border-color:transparent}.mchip.warn{background:rgba(232,163,23,.14);color:#9a6a00;border-color:rgba(232,163,23,.35)}

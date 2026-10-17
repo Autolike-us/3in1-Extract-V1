@@ -7,9 +7,15 @@ const ROWS = Array.from({ length: 130 }, (_, i) => ({ id: 'g' + i, name: 'Member
 const RUNS = [
   { id: 'r1', platform: 'facebook', kind: 'group_members', label: 'Facebook · Group members', opts: { limit: 200 }, status: 'done', count: 130, startedAt: Date.now() - 3600e3 },
   { id: 'r2', platform: 'tiktok', kind: 'comments', label: 'TikTok · Comments', opts: { limit: 200 }, status: 'error', error: 'Reload the tab', count: 0, startedAt: Date.now() - 7200e3 },
+  { id: 'r3', platform: 'tiktok', kind: 'videos', label: 'TikTok · Videos', opts: { limit: 5 }, status: 'done', count: 3, startedAt: Date.now() - 9000e3 },
 ];
-const stub = ([runs, rows, tabs]) => {
-  const store = { runs, 'rows:r1': rows, 'rows:r2': [], debugLog: [{ t: Date.now(), l: 'warn', m: 'HTTP 429 /api/v1/friendships/<id>/followers/', r: 'r2', d: 'retry 1/2' }] };
+const VROWS = [
+  { id: 'v1', author: 'chef', platform: 'tiktok', url: 'https://www.tiktok.com/@chef/video/1', media: [{ type: 'video', url: 'https://v.test/ok.mp4' }, { type: 'image', url: 'https://img.test/c1.jpg' }] },
+  { id: 'v2', author: 'chef', platform: 'tiktok', url: 'https://www.tiktok.com/@chef/video/2', media: [{ type: 'video', url: 'https://v.test/fake.mp4' }, { type: 'image', url: 'https://img.test/c2.jpg' }] },
+  { id: 'v3', author: 'chef', platform: 'tiktok', url: 'https://www.tiktok.com/@chef/video/3', videoMissing: true, media: [{ type: 'video', url: 'https://v.test/gone.mp4' }] },
+];
+const stub = ([runs, rows, tabs, vrows]) => {
+  const store = { runs, 'rows:r1': rows, 'rows:r2': [], 'rows:r3': vrows, debugLog: [{ t: Date.now(), l: 'warn', m: 'HTTP 429 /api/v1/friendships/<id>/followers/', r: 'r2', d: 'retry 1/2' }] };
   window.__clip = ''; Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { window.__clip = t; } }, configurable: true });
   window.__sent = [];
   const page = { label: 'Group members', primary: 'group_members', kinds: [{ id: 'group_members', label: 'Group members' }, { id: 'posts', label: 'Posts' }] };
@@ -26,9 +32,10 @@ const stub = ([runs, rows, tabs]) => {
   const open = async (name, files, vp = { width: 1360, height: 900 }, dark = false) => {
     const ctx = await browser.newContext({ viewport: vp, colorScheme: dark ? 'dark' : 'light', acceptDownloads: true }); const pg = await ctx.newPage(); pg.setDefaultTimeout(15000);
     const errs = []; pg.on('pageerror', (e) => errs.push(String(e)));
-    await pg.route('https://img.test/**', (r) => r.fulfill({ contentType: 'image/jpeg', body: Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64') }));
+    await pg.route('https://v.test/**', (r) => { const u = r.request().url(); if (/ok\.mp4/.test(u)) return r.fulfill({ contentType: 'video/mp4', body: Buffer.alloc(6000, 7) }); if (/fake\.mp4/.test(u)) return r.fulfill({ contentType: 'image/png', body: Buffer.alloc(3000, 1) }); return r.fulfill({ status: 403, contentType: 'text/html', body: 'blocked' }); });
+    await pg.route('https://img.test/**', (r) => r.fulfill({ contentType: 'image/jpeg', body: Buffer.concat([Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64'), Buffer.alloc(400, 1)]) }));
     await pg.setContent(read(name).replace(/<script src="[^"]*"><\/script>/g, '').replace(/<link[^>]*stylesheet[^>]*>/, '<style>' + read('style.css') + '</style>'));
-    await pg.evaluate(stub, [RUNS, ROWS, tabs]);
+    await pg.evaluate(stub, [RUNS, ROWS, tabs, VROWS]);
     for (const f of files) await pg.addScriptTag({ content: read(f) });
     await pg.waitForTimeout(500);
     return { pg, errs, ctx };
@@ -51,7 +58,7 @@ const stub = ([runs, rows, tabs]) => {
   await pg.screenshot({ path: path.join(OUT, '2-empty-platform.png') });
 
   await pg.click('nav [data-view=results]'); await pg.waitForTimeout(300);
-  check('results list shows both runs and a nav count', (await pg.$$('.run')).length === 2 && (await pg.textContent('#navCount')) === '2');
+  check('results list shows both runs and a nav count', (await pg.$$('.run')).length === 3 && (await pg.textContent('#navCount')) === '3');
   check('table renders first 100 of 130 rows with thumbnails and no raw media column', (await pg.$$('tbody tr')).length === 100 && !!(await pg.$('td img')) && !/>media</.test(await pg.innerHTML('thead')));
   await pg.click('[data-x=more]'); check('"Show more" reveals the rest', (await pg.$$('tbody tr')).length === 130);
   await pg.fill('#q', 'Member 12'); await pg.waitForTimeout(450);
@@ -66,9 +73,16 @@ const stub = ([runs, rows, tabs]) => {
   const zip = await grab('[data-x=media]'); await pg.waitForTimeout(100);
   const { execFileSync } = require('node:child_process');
   const listing = execFileSync('python3', ['-I', '-c', 'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);print(len(z.namelist()));print([n for n in z.namelist() if n.startswith("facebook")][:2])', zip]).toString();
-  check('media ZIP bundles all 130 images + index.csv in tidy folders', /^131\n/.test(listing) && /facebook\/Member_0\/g0_1\.jpg/.test(listing));
+  check('media ZIP bundles all 130 images + index.csv + report in tidy folders', /^132\n/.test(listing) && /facebook\/Member_0\/g0_1\.jpg/.test(listing));
   await pg.click('[data-x=hidestrip]'); check('upsell strip is dismissible', !(await pg.isVisible('#strip')));
 
+  await pg.click('.run[data-r=r3]'); await pg.waitForTimeout(300);
+  check('results table marks rows that hold a real video (▶ chip) and rows with no video file', (await pg.$$('.mchip.vid')).length === 3 && (await pg.$$('.mchip.warn')).length === 1);
+  const vz = await grab('[data-x=media]'); await pg.waitForTimeout(300);
+  const vlist = execFileSync('python3', ['-I', '-c', 'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);print(sorted(z.namelist()));print(z.read("download-report.txt").decode())', vz]).toString();
+  check('TikTok ZIP: the real video is saved as .mp4 (not a picture)', /tiktok\/chef\/v1_1\.mp4/.test(vlist));
+  check('TikTok ZIP: a "video" the server answers with an image is rejected, not saved as a video', !/v2_1\.(mp4|png|jpg)/.test(vlist) && /FAILED  video expected video, server sent image\/png/.test(vlist));
+  check('TikTok ZIP: blocked links are listed as failed with the reason; report summarises the counts', /FAILED  video HTTP 403/.test(vlist) && /videos saved: 1  photos saved: 2  failed: 2/.test(vlist));
   await pg.click('.run[data-r=r2]'); await pg.waitForTimeout(200);
   await pg.click('#viewer [data-x=report]'); await pg.waitForTimeout(200);
   const rep = await pg.evaluate(() => window.__clip);

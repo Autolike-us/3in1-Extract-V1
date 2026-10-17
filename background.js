@@ -102,17 +102,21 @@ async function openDashboard(hash = '') {
   else await chrome.tabs.create({ url: url + hash });
 }
 
-/* CDN hosts check Referer on media; give the extension pages a matching one so downloads work. */
+/* CDN hosts check Referer (and sometimes Origin) on media. Give requests made by the extension's own pages the headers a normal page on
+   that site would send, so photo / video downloads work. These rules never touch normal browsing (extension-initiated requests only). */
+const MEDIA_HOSTS = [
+  ['tiktok.com', 'https://www.tiktok.com/'], ['tiktokcdn.com', 'https://www.tiktok.com/'], ['tiktokcdn-us.com', 'https://www.tiktok.com/'], ['tiktokcdn-eu.com', 'https://www.tiktok.com/'],
+  ['tiktokv.com', 'https://www.tiktok.com/'], ['tiktokv.us', 'https://www.tiktok.com/'], ['byteoversea.com', 'https://www.tiktok.com/'], ['ibytedtos.com', 'https://www.tiktok.com/'], ['muscdn.com', 'https://www.tiktok.com/'],
+  ['cdninstagram.com', 'https://www.instagram.com/'], ['instagram.com', 'https://www.instagram.com/'],
+  ['fbcdn.net', 'https://www.facebook.com/'],
+];
 async function installRules() {
-  const mk = (id, domain, referer) => ({ id, priority: 1, action: { type: 'modifyHeaders', requestHeaders: [{ header: 'referer', operation: 'set', value: referer }] },
+  const mk = ([domain, referer], i) => ({ id: i + 1, priority: 1,
+    action: { type: 'modifyHeaders', requestHeaders: [{ header: 'referer', operation: 'set', value: referer }, { header: 'origin', operation: 'remove' }] },
     condition: { requestDomains: [domain], resourceTypes: ['xmlhttprequest', 'media', 'image', 'other'], initiatorDomains: [chrome.runtime.id] } });
   try {
-    await chrome.declarativeNetRequest.updateSessionRules({
-      removeRuleIds: [1, 2, 3, 4, 5],
-      addRules: [mk(1, 'tiktokcdn.com', 'https://www.tiktok.com/'), mk(2, 'tiktokcdn-us.com', 'https://www.tiktok.com/'), mk(3, 'tiktokv.com', 'https://www.tiktok.com/'),
-        mk(4, 'cdninstagram.com', 'https://www.instagram.com/'), mk(5, 'fbcdn.net', 'https://www.facebook.com/')],
-    });
-  } catch (_) {}
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: Array.from({ length: 40 }, (_, i) => i + 1), addRules: MEDIA_HOSTS.map(mk) });
+  } catch (e) { logBg('error', 'could not install download header rules', String(e)); }
 }
 chrome.runtime.onInstalled.addListener((d) => { installRules(); if (d.reason === 'install') openDashboard('#welcome'); });
 chrome.runtime.onStartup.addListener(installRules);

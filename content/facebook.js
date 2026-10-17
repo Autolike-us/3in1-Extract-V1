@@ -7,17 +7,17 @@
 
   /* Video file addresses: captured from Facebook's own page data (fb-sniffer.js) and scanned from inline page JSON. */
   const VIDEOS = {};
-  const RANK = { browser_native_hd_url: 4, playable_url_quality_hd: 3, browser_native_sd_url: 2, playable_url: 1 };
+  const RANK = { hd_src_no_ratelimit: 6, hd_src: 5, browser_native_hd_url: 5, playable_url_quality_hd: 4, sd_src_no_ratelimit: 3, browser_native_sd_url: 3, sd_src: 2, progressive_url: 2, playable_url: 1 };
   const addVideo = (id, url, q) => { if (id && url && (!VIDEOS[id] || VIDEOS[id].q < q)) VIDEOS[id] = { url, q }; };
   document.addEventListener('aurora-fb-media', (e) => { try { for (const v of JSON.parse(e.detail)) addVideo(v.id, v.url, v.q); } catch (_) {} });
   document.dispatchEvent(new CustomEvent('aurora-fb-replay'));
   const scanned = new WeakSet();
   function scanScripts() {
-    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url)":"((?:[^"\\]|\\.)+)"/g;
+    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url|hd_src_no_ratelimit|hd_src|sd_src_no_ratelimit|sd_src|progressive_url)":"((?:[^"\\]|\\.)+)"/g;
     for (const sc of document.scripts) {
       if (scanned.has(sc)) continue; scanned.add(sc);
       const t = sc.textContent || '';
-      if (t.indexOf('playable_url') < 0 && t.indexOf('browser_native') < 0) continue;
+      if (t.indexOf('playable_url') < 0 && t.indexOf('browser_native') < 0 && t.indexOf('_src') < 0 && t.indexOf('progressive_url') < 0) continue;
       let m; re.lastIndex = 0;
       while ((m = re.exec(t))) {
         const ids = Array.from(t.slice(Math.max(0, m.index - 900), m.index).matchAll(/"(?:id|video_id)":"(\d{6,})"/g));
@@ -29,7 +29,7 @@
   }
   /** Video file address(es) inside a page's HTML/JSON: [{id,url,q}] in order of appearance, best quality per video id. */
   function videosInText(text) {
-    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url)":"((?:[^"\\]|\\.)+)"/g;
+    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url|hd_src_no_ratelimit|hd_src|sd_src_no_ratelimit|sd_src|progressive_url)":"((?:[^"\\]|\\.)+)"/g;
     const best = new Map(); let m;
     while ((m = re.exec(text))) {
       const ids = Array.from(text.slice(Math.max(0, m.index - 900), m.index).matchAll(/"(?:id|video_id)":"(\d{6,})"/g));
@@ -40,16 +40,31 @@
     }
     return Array.from(best.values());
   }
-  /** Open a post's own page and read its video file. */
-  async function videoFromPermalink(row) {
-    const r = await fetch(row.url, { credentials: 'include' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const html = await r.text();
-    const list = videosInText(html);
-    for (const v of list) if (v.id !== '?') addVideo(v.id, v.url, v.q);
+  /** Find a post's video file by trying, in order: the post page, Facebook's embed player page, the watch page. Returns the
+   *  first video file found plus a trail of what each step saw (for the debug log). */
+  async function videoFromPermalink(row, log) {
     const want = row.videoIds || [];
-    const hit = list.find((v) => want.includes(v.id)) || list[0];
-    return { url: hit ? hit.url : null, found: list.length, len: html.length };
+    const origin = location.origin;
+    const steps = [{ label: 'post page', url: row.url }];
+    steps.push({ label: 'embed player', url: `${origin}/plugins/video.php?href=${encodeURIComponent(row.url.split('?')[0])}&show_text=false&width=560` });
+    for (const id of want.slice(0, 1)) {
+      steps.push({ label: 'watch page', url: `${origin}/watch/?v=${id}` });
+      steps.push({ label: 'embed by video id', url: `${origin}/plugins/video.php?href=${encodeURIComponent(`${origin}/reel/${id}/`)}&show_text=false&width=560` });
+    }
+    const trail = [];
+    for (const st of steps) {
+      try {
+        const r = await fetch(st.url, { credentials: 'include' });
+        if (!r.ok) { trail.push(`${st.label}: HTTP ${r.status}`); continue; }
+        const html = await r.text();
+        const list = videosInText(html);
+        for (const v of list) if (v.id !== '?') addVideo(v.id, v.url, v.q);
+        trail.push(`${st.label}: ${html.length}b, ${list.length} file(s)${/login|checkpoint/i.test(html.slice(0, 3000)) && !list.length ? ', login/checkpoint page?' : ''}`);
+        const hit = list.find((v) => want.includes(v.id)) || list[0];
+        if (hit) return { url: hit.url, via: st.label, trail };
+      } catch (e) { trail.push(`${st.label}: ${e.message}`); }
+    }
+    return { url: null, trail };
   }
   const videoIdsIn = (card) => {
     const ids = new Set();
@@ -178,9 +193,9 @@
         if (row._diag) log('info', 'video post', JSON.stringify(row._diag));
         if (wantMedia && row.videoMissing && row.url && fails < 3) {
           try {
-            const v = await videoFromPermalink(row);
-            if (v.url) { row.media.unshift({ type: 'video', url: v.url }); delete row.videoMissing; log('info', 'video file found on the post page', `${v.found} candidate(s)`); fails = 0; }
-            else log('warn', 'post page has no video file', `html ${v.len}b`);
+            const v = await videoFromPermalink(row, log);
+            if (v.url) { row.media.unshift({ type: 'video', url: v.url }); delete row.videoMissing; log('info', 'video file found via ' + v.via, v.trail.join(' | ')); fails = 0; }
+            else log('warn', 'no video file found', v.trail.join(' | '));
           } catch (e) { fails++; log('warn', 'could not open post page: ' + e.message, fails >= 3 ? 'giving up on page lookups for this run' : ''); }
           await ctx.pause();
         }

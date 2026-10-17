@@ -1,11 +1,22 @@
 // Loads the real unpacked extension in Chromium: service worker starts, dashboard + popup open, a run round-trips
 // through the content script on a local page that pretends to be a Facebook Marketplace page.
 const { chromium } = require('/opt/node-tools/node_modules/playwright');
-const path = require('node:path'), fs = require('node:fs'), os = require('node:os');
+const path = require('node:path'), fs = require('node:fs'), os = require('node:os'), https = require('node:https'), { execFileSync } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
+// A local HTTPS server stands in for TikTok's video host: it refuses anything without the Referer a TikTok page would send.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'axc-'));
+execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=v16-webapp-prime.tiktok.com', '-keyout', tmp + '/k.pem', '-out', tmp + '/c.pem', '-days', '1'], { stdio: 'ignore' });
+const seen = [];
+const cdn = https.createServer({ key: fs.readFileSync(tmp + '/k.pem'), cert: fs.readFileSync(tmp + '/c.pem') }, (req, res) => {
+  seen.push({ referer: req.headers.referer || '', origin: req.headers.origin || '' });
+  if (req.headers.referer !== 'https://www.tiktok.com/' || req.headers.origin) { res.writeHead(403, { 'content-type': 'text/html' }); return res.end('forbidden'); }
+  res.writeHead(200, { 'content-type': 'video/mp4', 'access-control-allow-origin': '*' }); res.end(Buffer.alloc(5000, 9));
+});
 (async () => {
+  await new Promise((r) => cdn.listen(0, '127.0.0.1', r));
+  const cdnPort = cdn.address().port;
   const exe = fs.readdirSync('/opt/pw-browsers').filter((d) => /^chromium-/.test(d)).map((d) => `/opt/pw-browsers/${d}/chrome-linux/chrome`).find(fs.existsSync);
-  const ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'ax-')), { executablePath: exe, headless: false, args: ['--headless=new', '--no-sandbox', `--disable-extensions-except=${ROOT}`, `--load-extension=${ROOT}`, '--host-resolver-rules=MAP *.facebook.com 127.0.0.1'] });
+  const ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'ax-')), { executablePath: exe, headless: false, ignoreHTTPSErrors: true, args: ['--headless=new', '--no-sandbox', `--disable-extensions-except=${ROOT}`, `--load-extension=${ROOT}`, `--host-resolver-rules=MAP *.facebook.com 127.0.0.1, MAP v16-webapp-prime.tiktok.com 127.0.0.1:${cdnPort}`, '--ignore-certificate-errors', '--no-proxy-server'] });
   let sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker', { timeout: 15000 });
   const id = sw.url().split('/')[2];
   console.log('PASS service worker up', id);
@@ -51,5 +62,9 @@ const ROOT = path.join(__dirname, '..');
   const gm = await dash.$$eval('tbody tr', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ')));
   if (gm.length !== 2 || !/Ana Silva/.test(gm[0])) throw new Error('members rows: ' + JSON.stringify(gm));
   console.log('PASS opened the Members tab by itself and extracted:', gm[0]);
-  await ctx.close();
+  // ---- media download headers: the dashboard page can fetch a TikTok video host that demands a TikTok Referer
+  const vres = await dash.evaluate(async () => { try { const r = await fetch('https://v16-webapp-prime.tiktok.com/video/tos/x.mp4', { credentials: 'include' }); return { ok: r.ok, status: r.status, type: r.headers.get('content-type'), len: (await r.arrayBuffer()).byteLength }; } catch (e) { return { error: String(e) }; } });
+  if (!vres.ok || vres.type !== 'video/mp4' || vres.len !== 5000) throw new Error('TikTok video host fetch failed: ' + JSON.stringify(vres) + ' seen=' + JSON.stringify(seen));
+  console.log('PASS the extension supplies the Referer a *.tiktok.com video host needs (status', vres.status + ',', vres.len, 'bytes)');
+  await ctx.close(); cdn.close();
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });
