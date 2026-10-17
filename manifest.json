@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aurora Extract \u2014 Facebook, Instagram & TikTok data",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Collect public data from Facebook, Instagram & TikTok pages you can already see. Export to CSV, Excel or JSON. Free.",
   "permissions": [
     "storage",
@@ -81,6 +81,7 @@
       ],
       "js": [
         "content/common.js",
+        "core/audit.js",
         "content/facebook.js",
         "content/instagram.js",
         "content/tiktok.js",

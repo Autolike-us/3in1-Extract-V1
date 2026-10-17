@@ -164,7 +164,7 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const dets = await pg.evaluate(() => { const d = (u) => AuroraX.platforms.facebook.detect(new URL(u)); return { feed: d('https://www.facebook.com/groups/9/'), prof: d('https://www.facebook.com/acme.cafe'), pid: d('https://www.facebook.com/profile.php?id=55'), fr: d('https://www.facebook.com/acme.cafe/friends'), post: d('https://www.facebook.com/acme/posts/123'), mem: d('https://www.facebook.com/groups/9/members') }; });
   const ids = (d) => d.kinds.map((k) => k.id).join();
   check('FB group feed offers Group members (↗ opens the Members tab) + Group info + posts', ids(dets.feed) === 'posts,group_members,group_info,comments' && dets.feed.kinds[1].goto === 'https://www.facebook.com/groups/9/members');
-  check('FB profile offers friends / followers / following lists with goto links', ids(dets.prof) === 'page_info,posts,people_friends,people_followers,people_following' && dets.prof.kinds[3].goto === 'https://www.facebook.com/acme.cafe/followers');
+  check('FB profile offers friends / followers / following lists with goto links', ids(dets.prof) === 'page_info,posts,people_friends,people_followers,people_following,audit' && dets.prof.kinds[3].goto === 'https://www.facebook.com/acme.cafe/followers');
   check('FB profile.php?id= builds sk= links', dets.pid.kinds.find((k) => k.id === 'people_friends').goto === 'https://www.facebook.com/profile.php?id=55&sk=friends');
   check('FB friends page → people list; post page → comments, commenters, reactors', dets.fr.primary === 'people' && ids(dets.post) === 'comments,commenters,reactors,posts' && dets.mem.primary === 'group_members');
 

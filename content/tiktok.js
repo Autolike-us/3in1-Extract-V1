@@ -9,7 +9,7 @@
     const seg = u.pathname.split('/').filter(Boolean);
     if (seg[0] === 'tag' && seg[1]) return { label: '#' + decodeURIComponent(seg[1]), primary: 'hashtag', kinds: [{ id: 'hashtag', label: 'Hashtag videos' }] };
     if (seg[0] && seg[0].startsWith('@') && seg[1] === 'video') return { label: 'Video', primary: 'comments', kinds: [{ id: 'comments', label: 'All comments' }, { id: 'commenters', label: 'People who commented' }, { id: 'video', label: 'This video (with download)' }] };
-    if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos (with files)' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }] };
+    if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos (with files)' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }, { id: 'audit', label: '✦ Health check (Aurora Audit)' }] };
     if (seg[0] === 'search' || seg[0] === 'explore' || seg[0] === 'discover') return { label: 'Search / discover', primary: 'videos', kinds: [{ id: 'videos', label: 'Videos on screen' }] };
     return { label: 'TikTok', primary: null, kinds: [] };
   }
@@ -196,6 +196,7 @@
   }
 
   async function commenters(ctx) { await A.commenters(ctx, comments); }
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'tiktok', profile, posts: videos, nPosts: 24, media: true }); }
 
   /** Followers / following: ONLY rows inside the profile's list popup. */
   async function followList(ctx, which) {
@@ -229,8 +230,8 @@
 
   A.register('tiktok', {
     name: 'TikTok', hosts: /(^|\.)tiktok\.com$/, detect,
-    kinds: ['profile', 'videos', 'video', 'comments', 'commenters', 'followers', 'following', 'hashtag'],
-    tasks: { profile, videos, video, comments, commenters, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos },
+    kinds: ['profile', 'videos', 'video', 'comments', 'commenters', 'followers', 'following', 'hashtag', 'audit'],
+    tasks: { profile, videos, video, comments, commenters, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos, audit },
     _test: { mapUser, mapVideo, detect },
   });
 })();

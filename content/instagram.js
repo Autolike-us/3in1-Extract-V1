@@ -23,7 +23,7 @@
     if (seg[0] === 'explore' && seg[1] === 'tags') return { label: '#' + decodeURIComponent(seg[2] || ''), primary: 'hashtag', kinds: [{ id: 'hashtag', label: 'Hashtag posts' }] };
     if (['p', 'reel', 'tv'].includes(seg[0]) && seg[1]) return { label: 'Post / reel', primary: 'comments', kinds: [{ id: 'comments', label: 'All comments' }, { id: 'commenters', label: 'People who commented' }, { id: 'likers', label: 'People who liked' }, { id: 'post', label: 'This post (with media)' }] };
     if (seg[0] && !NOT_USER.test(seg[0])) {
-      const k = [{ id: 'profile', label: 'Profile & business contact' }, { id: 'posts', label: 'Posts & reels' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }];
+      const k = [{ id: 'profile', label: 'Profile & business contact' }, { id: 'posts', label: 'Posts & reels' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }, { id: 'audit', label: '✦ Health check (Aurora Audit)' }];
       return { label: '@' + seg[0], primary: 'profile', kinds: k };
     }
     return { label: 'Instagram', primary: null, kinds: [] };
@@ -284,12 +284,13 @@
     await withFallback(ctx, 'likers', async () => { const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${m.id}/likers/`, H, { retries: 1, wait: 8000 }); ctx.emit((j.users || []).map(mapUserBrief)); }, () => listDom(ctx, 'likers'));
   }
   async function commenters(ctx) { await A.commenters(ctx, comments); }
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'instagram', profile, posts, nPosts: 30, media: false }); }
   async function hashtag(ctx) { await gridDom(ctx, decodeURIComponent(location.pathname.split('/')[3] || '')); }
 
   A.register('instagram', {
     name: 'Instagram', hosts: /(^|\.)instagram\.com$/, detect,
-    kinds: ['profile', 'posts', 'followers', 'following', 'comments', 'commenters', 'likers', 'post', 'hashtag'],
-    tasks: { profile, posts, followers: listTask('followers'), following: listTask('following'), comments, commenters, likers, post, hashtag },
+    kinds: ['profile', 'posts', 'followers', 'following', 'comments', 'commenters', 'likers', 'post', 'hashtag', 'audit'],
+    tasks: { profile, posts, followers: listTask('followers'), following: listTask('following'), comments, commenters, likers, post, hashtag, audit },
     _test: { mapPost, mapProfile, mapComment, mapUserBrief, shortcodeToId, detect },
   });
 })();

@@ -121,6 +121,34 @@
     ctx.emit(Array.from(map.values()).sort((a, b) => b.comments - a.comments));
   };
 
+  /** Aurora Audit: read the profile and the latest posts with the platform's own tasks, then score them locally. */
+  A.runAudit = async function (ctx, { platform, profile, posts, nPosts, media }) {
+    const grab = (limit, mediaOn) => {
+      const rows = [], p = Object.create(ctx);
+      p.limit = limit; p.opts = Object.assign({}, ctx.opts, { limit, media: mediaOn });
+      p.count = () => rows.length;
+      p.emit = (r) => { for (const x of [].concat(r)) if (x && rows.length < limit) rows.push(x); return 1; };
+      p.progress = (note) => ctx.progress(note || '', Math.min(rows.length, limit));
+      return { p, rows };
+    };
+    ctx.progress('Reading the profile…');
+    const a = grab(1, false);
+    await profile(a.p);
+    if (!a.rows.length) throw new Error('Could not read this profile. Open the profile page itself and try again.');
+    const prof = a.rows[0];
+    let list = [], postNote = '';
+    if (!ctx.stopped() && posts) {
+      ctx.progress('Reading the latest posts…');
+      const b = grab(nPosts, media);
+      try { await posts(b.p); } catch (e) { postNote = 'Posts could not be read: ' + String((e && e.message) || e).slice(0, 140); ctx.log('warn', 'audit: ' + postNote); }
+      list = b.rows;
+    }
+    ctx.progress('Scoring…');
+    const res = globalThis.AuroraAudit.analyze({ platform, profile: prof, posts: list, now: Date.now() });
+    if (postNote) res.notes.unshift(postNote);
+    ctx.emit(globalThis.AuroraAudit.toRow(res, prof));
+  };
+
   A.mediaFromImgs = (el, minSize = 120) => A.qa('img', el)
     .filter((i) => (i.naturalWidth || i.width || 0) >= minSize && /^https?:/.test(i.src) && !/emoji|static\.|rsrc\.php|profile_pic_blank/.test(i.src))
     .map((i) => ({ type: 'image', url: i.currentSrc || i.src }));

@@ -3,7 +3,7 @@
 Open https://chrome.google.com/webstore/devconsole , sign in as the AutomAi publisher, then paste these one at a time (new chat per prompt is fine).
 
 ## Prompt 0 - upload (do this by hand, 1 minute)
-Dashboard -> **Add new item** -> choose `1-UPLOAD-THIS/aurora-extract-0.2.6.zip`. Claude cannot pick local files, so do this yourself. You land on the item's edit page.
+Dashboard -> **Add new item** -> choose `1-UPLOAD-THIS/aurora-extract-0.3.0.zip`. Claude cannot pick local files, so do this yourself. You land on the item's edit page.
 
 ## Prompt 1 - Account / profile check
 ```
@@ -53,6 +53,9 @@ TikTok
 
 EXPORT
 CSV, Excel (.xlsx), JSON, and a media ZIP (photos and videos in tidy folders with a report of every file).
+
+HEALTH CHECK
+Run Aurora Audit on a profile or page for a 0-100 score covering the bio, link, posting rhythm, captions and engagement, plus your top fixes. It is calculated on your own computer from what you can already see.
 
 BUILT TO BE EASY
 • Pick a platform, open the page, choose what to collect — Aurora Extract recognises the page and offers the right options

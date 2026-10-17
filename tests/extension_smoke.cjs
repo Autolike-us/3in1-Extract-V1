@@ -62,6 +62,25 @@ const cdn = https.createServer({ key: fs.readFileSync(tmp + '/k.pem'), cert: fs.
   const gm = await dash.$$eval('tbody tr', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ')));
   if (gm.length !== 2 || !/Ana Silva/.test(gm[0])) throw new Error('members rows: ' + JSON.stringify(gm));
   console.log('PASS opened the Members tab by itself and extracted:', gm[0]);
+  // ---- Aurora Audit through the real extension: profile page -> "Health check" -> report in the dashboard
+  await ctx.unroute('https://www.facebook.com/**');
+  await ctx.route('https://www.facebook.com/**', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><title>Acme Cafe</title><body><div role="main"><h1>Acme Café</h1><a href="https://l.facebook.com/l.php?u=${encodeURIComponent('https://acme.example')}">acme.example</a><a href="mailto:hi@acme.example">mail</a><div>Page · Coffee shop</div><div>4.2K followers</div></div>
+    <div role="feed">${[['2h', 'Fresh croissants today — who wants one?', 40], ['2d', 'Closed Monday.', 12], ['5d', 'New menu is out! Visit us.', 25], ['9d', 'Live music Friday, come along', 31]].map(([w, t, n], i) => `<div role="article"><h3><a href="https://www.facebook.com/acme.cafe">Acme Café</a></h3><a href="https://www.facebook.com/acme.cafe/posts/${200 + i}"><span>${w}</span></a><div dir="auto">${t}</div><div aria-label="Like: ${n} people">${n}</div></div>`).join('')}</div></body>` }));
+  await page.goto('https://www.facebook.com/acme.cafe'); await page.waitForTimeout(800);
+  await dash.bringToFront(); await dash.click('nav [data-view=extract]');
+  await dash.click('[data-refresh]'); await dash.waitForTimeout(800);
+  await dash.click('.tabrow'); await dash.waitForTimeout(500);
+  const achips = await dash.$$eval('#kinds .chip', (c) => c.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
+  if (!achips.some((c) => /Health check/.test(c))) throw new Error('no Health check chip on a page: ' + achips);
+  await dash.click('#kinds [data-k=audit]'); await dash.click('#goBtn');
+  await dash.waitForFunction(() => /Done[\s\S]*Health check/.test(document.querySelector('#liveCard')?.textContent || ''), null, { timeout: 60000 });
+  await dash.click('nav [data-view=results]'); await dash.waitForTimeout(500);
+  await dash.click('.run:first-child'); await dash.waitForTimeout(400);
+  const score = await dash.textContent('.agauge b').catch(() => null);
+  if (!score || isNaN(+score)) throw new Error('no audit report: ' + (await dash.textContent('#viewer')).slice(0, 200));
+  const nsec = await dash.$$eval('.asec', (a) => a.length);
+  if (nsec !== 5) throw new Error('audit sections: ' + nsec);
+  console.log('PASS Health check ran in the real extension and opened a report: score', score, 'with', nsec, 'sections');
   // ---- media download headers: the dashboard page can fetch a TikTok video host that demands a TikTok Referer
   const vres = await dash.evaluate(async () => { try { const r = await fetch('https://v16-webapp-prime.tiktok.com/video/tos/x.mp4', { credentials: 'include' }); return { ok: r.ok, status: r.status, type: r.headers.get('content-type'), len: (await r.arrayBuffer()).byteLength }; } catch (e) { return { error: String(e) }; } });
   if (!vres.ok || vres.type !== 'video/mp4' || vres.len !== 5000) throw new Error('TikTok video host fetch failed: ' + JSON.stringify(vres) + ' seen=' + JSON.stringify(seen));

@@ -99,7 +99,7 @@
       const go = (t) => (isId ? `${FB}/profile.php?id=${u.searchParams.get('id')}&sk=${t}` : `${FB}/${handle}/${t}`);
       if (/^(friends|friends_all|friends_mutual|followers|following)$/i.test(tab)) return { label: `People · ${tab.replace('_all', '')}`, primary: 'people', kinds: [K('people', `List of ${tab.replace('_all', '')} (names + profile links)`), K('page_info', 'Profile / page details', isId ? `${FB}/profile.php?id=${u.searchParams.get('id')}` : `${FB}/${handle}`)] };
       if (/about/.test(tab)) return { label: 'Profile / page — About', primary: 'page_info', kinds: [K('page_info', 'Contact & About details')] };
-      return { label: 'Profile / page', primary: 'page_info', kinds: [K('page_info', 'Profile & contact details'), K('posts', 'Posts'), K('people_friends', 'Friends list', go('friends')), K('people_followers', 'Followers list', go('followers')), K('people_following', 'Following list', go('following'))] };
+      return { label: 'Profile / page', primary: 'page_info', kinds: [K('page_info', 'Profile & contact details'), K('posts', 'Posts'), K('people_friends', 'Friends list', go('friends')), K('people_followers', 'Followers list', go('followers')), K('people_following', 'Following list', go('following')), K('audit', '✦ Health check (Aurora Audit)')] };
     }
     return { label: 'Facebook', primary: null, kinds: [] };
   }
@@ -384,10 +384,12 @@
     ctx.emit({ id: location.pathname.split('/')[2], name, url: location.href.split('?')[0], members: A.parseCount(members), privacy, activity: posts, about: (A.meta('og:description') || '').slice(0, 600), media: A.meta('og:image') ? [{ type: 'image', url: A.meta('og:image') }] : [] });
   }
 
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'facebook', profile: pageInfo, posts, nPosts: 20, media: false }); }
+
   A.register('facebook', {
     name: 'Facebook', hosts: /(^|\.)facebook\.com$/, detect,
-    kinds: ['page_info', 'posts', 'comments', 'commenters', 'reactors', 'people', 'people_friends', 'people_followers', 'people_following', 'group_info', 'group_members', 'marketplace_list', 'marketplace_item'],
-    tasks: { page_info: pageInfo, posts, comments, commenters, reactors, people, people_friends: people, people_followers: people, people_following: people, group_info: groupInfo, group_members: groupMembers, marketplace_list: marketplaceList, marketplace_item: marketplaceItem, marketplace_seller: pageInfo },
+    kinds: ['page_info', 'posts', 'comments', 'commenters', 'reactors', 'people', 'people_friends', 'people_followers', 'people_following', 'group_info', 'group_members', 'marketplace_list', 'marketplace_item', 'audit'],
+    tasks: { audit, page_info: pageInfo, posts, comments, commenters, reactors, people, people_friends: people, people_followers: people, people_following: people, group_info: groupInfo, group_members: groupMembers, marketplace_list: marketplaceList, marketplace_item: marketplaceItem, marketplace_seller: pageInfo },
     _test: { parsePost, parseListingCard, detect },
   });
 })();

@@ -1,6 +1,6 @@
 # Chrome Web Store submission pack — Aurora Extract
 
-Everything below is ready to paste into the Developer Dashboard. Upload `dist/aurora-extract-0.2.6.zip` (built with `npm run package`).
+Everything below is ready to paste into the Developer Dashboard. Upload `dist/aurora-extract-0.3.0.zip` (built with `npm run package`).
 
 ## 0. Before you start (one time)
 - [ ] Publisher: you are signed in as **AutomAi**. The public developer name is what shoppers see — consider setting a display name that matches the brand (Account → Profile) so it reads "Aurora" / "Aurora Studios".
@@ -44,6 +44,9 @@ TikTok
 
 EXPORT
 CSV, Excel (.xlsx), JSON, and a media ZIP (photos and videos in tidy folders with a report of every file).
+
+HEALTH CHECK
+Run Aurora Audit on a profile or page for a 0-100 score covering the bio, link, posting rhythm, captions and engagement, plus your top fixes. It is calculated on your own computer from what you can already see.
 
 BUILT TO BE EASY
 • Pick a platform, open the page, choose what to collect — Aurora Extract recognises the page and offers the right options

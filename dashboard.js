@@ -107,17 +107,18 @@
       <div class="step"><span>3</span> What should we collect from “${h(page.label)}”?</div>
       <div class="card">
         <div class="chips" style="margin-top:0" id="kinds">${page.kinds.map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}" ${k.goto ? 'title="We\'ll open the right page in this tab for you"' : ''}>${h(k.label)}${k.goto ? ' <small>↗</small>' : ''}</button>`).join('')}</div>
-        <div class="opts">
+        ${S.kind === 'audit' ? `<div class="opts"><div><label>What happens</label><div class="sub" style="font-size:14px;color:var(--ink)">Aurora Audit reads this profile and its latest ~30 posts, then scores the bio, link, posting rhythm, captions and engagement and lists your top fixes. It takes about a minute — keep this tab in front.</div></div>
+          <div><label>Speed</label><div class="seg" id="oSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div><div class="sub">Gentle is the kindest to your account.</div></div></div>` : `<div class="opts">
           <div><label for="oLimit">How many items (max)</label><input id="oLimit" type="number" min="1" max="50000" value="${S.opts.limit}"><div class="sub">We stop earlier if the page runs out.</div></div>
           <div><label>Speed</label><div class="seg" id="oSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div><div class="sub">Gentle is the kindest to your account.</div></div>
           <div><label>Media</label><label class="switch"><input id="oMedia" type="checkbox" ${S.opts.media ? 'checked' : ''}> Keep photo &amp; video links</label><div class="sub">Needed for the media ZIP download.</div></div>
-        </div>
-        <div class="actions"><button class="btn primary big" id="goBtn">▶ Start extracting</button><span class="note">You can stop any time — what's collected is kept.</span></div>
+        </div>`}
+        <div class="actions"><button class="btn primary big" id="goBtn">${S.kind === 'audit' ? '▶ Run health check' : '▶ Start extracting'}</button><span class="note">You can stop any time — what's collected is kept.</span></div>
       </div>`;
     $('#kinds').onclick = (e) => { const b = e.target.closest('[data-k]'); if (b) { S.kind = b.dataset.k; renderOpts(); } };
     $('#oSpeed').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { S.opts.speed = b.dataset.s; renderOpts(); } };
-    $('#oLimit').onchange = (e) => { S.opts.limit = Math.max(1, Math.min(50000, +e.target.value || 200)); };
-    $('#oMedia').onchange = (e) => { S.opts.media = e.target.checked; };
+    if ($('#oLimit')) $('#oLimit').onchange = (e) => { S.opts.limit = Math.max(1, Math.min(50000, +e.target.value || 200)); };
+    if ($('#oMedia')) $('#oMedia').onchange = (e) => { S.opts.media = e.target.checked; };
     $('#goBtn').onclick = startRun;
   }
   async function startRun() {
@@ -125,7 +126,7 @@
     const kl = (page.kinds.find((k) => k.id === kind) || {}).label || kind;
     $('#goBtn').disabled = true;
     const kobj = page.kinds.find((k) => k.id === kind) || {};
-    const res = await send({ type: 'startRun', tabId: S.tabId, kind, goto: kobj.goto, platform: S.platform, label: `${C.platforms[S.platform].name} · ${kl}`, opts: { limit: S.opts.limit, delayMs: SPEED[S.opts.speed], media: S.opts.media } });
+    const res = await send({ type: 'startRun', tabId: S.tabId, kind, goto: kobj.goto, platform: S.platform, label: `${C.platforms[S.platform].name} · ${kl}`, opts: { limit: kind === 'audit' ? 30 : S.opts.limit, delayMs: SPEED[S.opts.speed], media: S.opts.media } });
     if (!res.ok) { toast(res.error || 'Could not start'); $('#goBtn').disabled = false; }
     else toast('Extraction started — you can keep browsing other tabs');
     await loadRuns(); renderLive();
@@ -186,6 +187,7 @@
   function renderViewer() {
     const v = $('#viewer'), run = S.runs.find((r) => r.id === S.active);
     if (!run) return;
+    if (run.kind === 'audit' && S.rows[0] && S.rows[0].audit) return renderAudit(v, run);
     const rows = visibleRows();
     const cols = X.columns(S.rows, C.preferred).filter((c) => !C.hidden.includes(c));
     const PAGE = 100, shown = rows.slice(0, S.page * PAGE);
@@ -229,8 +231,50 @@
     return `<td title="${h(s)}">${h(s)}</td>`;
   }
 
+
+  /* ---------- Aurora Audit report ---------- */
+  const AUD_COLOR = (s) => (s >= 85 ? 'var(--ok)' : s >= 70 ? '#4ea8de' : s >= 55 ? 'var(--warn)' : 'var(--bad)');
+  const DOT = { good: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)' };
+  function auditText(a, row) {
+    const L = [`Aurora Audit — ${row.name || row.username || ''} (${a.platform})`, `Score ${a.score}/100 · Grade ${a.grade} — ${a.verdict}`, ''];
+    for (const s of a.sections) L.push(`${s.label}: ${s.score == null ? 'not scored' : s.score + '/' + s.max}`);
+    if (a.topFixes.length) { L.push('', 'Top fixes:'); a.topFixes.forEach((f, i) => L.push(`${i + 1}. ${f.label} — ${f.tip}`)); }
+    return L.join('\n');
+  }
+  function renderAudit(v, run) {
+    const row = S.rows[0], a = row.audit, c = AUD_COLOR(a.score), st = a.stats;
+    const chip = (k, val) => (val == null || val === '' ? '' : `<span class="achip"><b>${h(String(val))}</b> ${h(k)}</span>`);
+    v.innerHTML = `
+      <div class="vhead"><h2>${h(run.label)}</h2>
+        <button class="btn" data-x="copyaudit">Copy summary</button><button class="btn" data-x="csv">CSV</button><button class="btn" data-x="xlsx">Excel</button><button class="btn" data-x="json">JSON</button><button class="btn" data-x="report" title="Copy a technical report for support">🐞 Debug</button>
+        <button class="btn danger" data-x="delete">Delete</button></div>
+      <div class="audit">
+        <div class="ahero">
+          <div class="agauge" style="--p:${a.score};--c:${c}"><div><b>${a.score}</b><small>out of 100</small></div></div>
+          <div class="ahead"><div class="agrade" style="background:${c}">${h(a.grade)}</div><h3>${h(row.name || row.username || 'This profile')}</h3><p>${h(a.verdict)}</p>
+            <div class="achips">${chip('followers', st.followers != null ? st.followers.toLocaleString() : null)}${chip('posts read', st.postsAnalysed)}${chip('posts / week', st.postsPerWeek)}${chip('days since last post', st.daysSinceLastPost)}${chip('hashtags / post', st.avgHashtags)}${chip('% engagement', st.engagementRate)}</div></div>
+        </div>
+        ${a.notes.length ? `<div class="warn">ℹ️ ${a.notes.map(h).join('<br>')}</div>` : ''}
+        ${a.topFixes.length ? `<h4 class="asub">Your top fixes</h4><ol class="afixes">${a.topFixes.map((f) => `<li><span class="adot" style="background:${DOT[f.level]}"></span><div><b>${h(f.label)}</b><span>${h(f.tip)}</span></div></li>`).join('')}</ol>` : '<div class="warn" style="background:rgba(18,165,148,.12);border-color:rgba(18,165,148,.35)">🎉 Nothing major to fix — keep it up.</div>'}
+        <h4 class="asub">Score breakdown</h4>
+        <div class="asections">${a.sections.map((s) => `
+          <details class="asec" ${s.findings.some((f) => f.level !== 'good') ? 'open' : ''}><summary><span class="aname">${h(s.label)}</span>
+            <span class="abar"><i style="width:${s.score == null ? 0 : Math.round((s.score / s.max) * 100)}%;background:${s.score == null ? 'var(--line)' : AUD_COLOR((s.score / s.max) * 100)}"></i></span>
+            <span class="anum">${s.score == null ? 'not scored' : s.score + ' / ' + s.max}</span></summary>
+            <ul>${s.findings.map((f) => `<li><span class="adot" style="background:${DOT[f.level]}"></span><div><b>${h(f.label)}</b><span>${h(f.detail)}</span>${f.tip ? `<em>→ ${h(f.tip)}</em>` : ''}</div></li>`).join('') || '<li class="note">No data available for this part.</li>'}</ul></details>`).join('')}
+        </div>
+        <p class="note" style="margin-top:18px">Scored on this computer from the profile and recent posts your own account can see. Benchmarks are rough guide values, not rules — every niche is different. No data left your browser.</p>
+        <div class="strip"><p>💡 Know what to fix — now keep it consistent. <b>Aurora Studios</b> can schedule the likes, follows and comments that keep an account active. <a href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=audit_report" target="_blank" rel="noopener">See Aurora Studios</a></p></div>
+      </div>`;
+    v.onclick = async (e) => {
+      const b = e.target.closest('[data-x]'); if (!b) return;
+      if (b.dataset.x === 'copyaudit') { try { await navigator.clipboard.writeText(auditText(a, row)); toast('Summary copied'); } catch (_) { toast('Could not copy'); } }
+      else act(b.dataset.x, run, S.rows);
+    };
+  }
+
   /* ---------- exports ---------- */
-  function exportRows(rows) { return rows.map((r) => { const o = { ...r }; o.mediaUrls = (r.media || []).map((m) => m.url); delete o.media; return o; }); }
+  function exportRows(rows) { return rows.map((r) => { const o = { ...r }; o.mediaUrls = (r.media || []).map((m) => m.url); delete o.media; delete o.audit; return o; }); }
   async function act(a, run, rows) {
     const base = `aurora-${slug(run.label)}-${new Date().toISOString().slice(0, 10)}`;
     const flat = exportRows(rows);
