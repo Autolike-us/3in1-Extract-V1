@@ -19,6 +19,7 @@
     S.view = v;
     for (const s of document.querySelectorAll('.view')) s.hidden = s.id !== 'view-' + v;
     for (const b of document.querySelectorAll('nav button')) b.classList.toggle('on', b.dataset.view === v);
+    if (v === 'audit') refreshAudit();
     if (v === 'results') { if (!S.userPicked && S.runs[0]) S.active = S.runs[0].id; loadRows().then(renderResults); }
     try { history.replaceState(null, '', '#' + v); } catch (_) {}
   }
@@ -132,10 +133,60 @@
     await loadRuns(); renderLive();
   }
 
+
+  /* ---------- health check page ---------- */
+  async function refreshAudit() { await scanTabs(); await pickDefaultTab(); renderPlatforms(); renderAuditView(); }
+  function renderAuditView() {
+    const p = C.platforms[S.platform], mine = S.tabs.filter((t) => t.platform === S.platform);
+    $('#auditPlats').innerHTML = Object.entries(C.platforms).map(([id, pp]) => `
+      <button class="plat" style="--c:${pp.color}" data-ap="${id}" aria-pressed="${S.platform === id}">
+        <span class="ic">${pp.glyph}</span><span><b>${pp.name}</b><small>${pp.blurb}</small></span>
+        ${S.tabs.some((t) => t.platform === id) ? '<span class="found">● tab open</span>' : ''}
+      </button>`).join('');
+    $('#auditPlats').onclick = (e) => { const b = e.target.closest('[data-ap]'); if (!b) return; S.platform = b.dataset.ap; S.tabId = null; S.desc = null; pickDefaultTab().then(() => { renderPlatforms(); renderAuditView(); }); };
+    const tabs = $('#auditTabs'), run = $('#auditRun');
+    if (!mine.length) {
+      tabs.innerHTML = `<div class="empty"><h3>Open ${p.name} in a normal tab</h3><p>Log in as usual and open the profile or page you want to check, then come back here. Or jump straight to:</p>
+        <div class="chips">${p.open.slice(0, 1).map((o, i) => `<button class="chip" data-aopen="${i}">${h(o.label)}<small>${h(o.hint)}</small></button>`).join('')}</div></div>`;
+      tabs.onclick = (e) => { if (e.target.closest('[data-aopen]')) chrome.tabs.create({ url: p.open[0].url }); };
+      run.innerHTML = ''; return;
+    }
+    tabs.innerHTML = `<div class="tabs">${mine.map((t) => `
+      <button class="tabrow" data-at="${t.id}" aria-pressed="${t.id === S.tabId}">
+        <span class="t"><b>${h(t.title || t.url)}</b><small>${h(t.url.replace(/^https?:\/\//, '').slice(0, 90))}</small></span>
+        ${t.id === S.tabId && S.desc && S.desc.page ? `<span class="badge">${h(S.desc.page.label)}</span>` : ''}
+      </button>`).join('')}</div>
+      <div class="chips"><button class="chip" data-arefresh>↻ Refresh tabs</button></div>`;
+    tabs.onclick = async (e) => {
+      const r = e.target.closest('[data-at]');
+      if (r) { S.tabId = +r.dataset.at; S.desc = await describe(S.tabId); S.kind = S.desc && S.desc.page ? S.desc.page.primary : null; renderAuditView(); return; }
+      if (e.target.closest('[data-arefresh]')) await refreshAudit();
+    };
+    const ok = S.desc && S.desc.page && S.desc.page.kinds.some((k) => k.id === 'audit');
+    run.innerHTML = ok ? `
+      <div class="card lrun"><div class="ring2"><b>?</b></div>
+        <div style="flex:1;min-width:240px"><h3 style="margin:0 0 2px">${h(p.name)} · ${h(S.desc.page.label)}</h3><p style="margin:0;color:var(--muted)">Keep this tab in front while the check runs (about a minute).</p>
+          <div class="seg" id="aSpeed" style="margin-top:12px;max-width:300px">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div></div>
+        <button class="btn primary big" id="auditGo">✦ Run health check</button></div>`
+      : `<div class="warn">${S.desc ? 'This page can\'t be scored. Open a <b>profile or page</b> (not a post, group or search) on ' + h(p.name) + ', then press “Refresh tabs”.' : 'This tab hasn\'t loaded the extension yet — reload the page once, then press “Refresh tabs”.'}</div>`;
+    if (ok) {
+      $('#aSpeed').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { S.opts.speed = b.dataset.s; renderAuditView(); } };
+      $('#auditGo').onclick = startAudit;
+    }
+  }
+  async function startAudit() {
+    $('#auditGo').disabled = true;
+    const res = await send({ type: 'startRun', tabId: S.tabId, kind: 'audit', platform: S.platform, label: `${C.platforms[S.platform].name} · Health check (Aurora Audit)`, opts: { limit: 30, delayMs: SPEED[S.opts.speed], media: true } });
+    if (!res.ok) { toast(res.error || 'Could not start'); $('#auditGo').disabled = false; }
+    else toast('Health check started — keep that tab in front');
+    await loadRuns(); renderLive();
+  }
+
   /* ---------- live card ---------- */
-  function renderLive() {
+  function renderLive() { paintLive($('#liveCard')); paintLive($('#auditLive')); }
+  function paintLive(el) {
+    if (!el) return;
     const r = S.runs.find((x) => x.status === 'running' || x.status === 'paused') || (S.justDone && S.runs.find((x) => x.id === S.justDone));
-    const el = $('#liveCard');
     if (!r) { el.hidden = true; return; }
     el.hidden = false;
     const live = r.status === 'running' || r.status === 'paused';
@@ -362,13 +413,14 @@
     $('#reportBtn').onclick = async () => toast((await AuroraReport.copy({})) ? 'Debug report copied — paste it in our Telegram channel' : 'Could not copy — use Help → Save as .txt');
     $('#helpReport').onclick = $('#reportBtn').onclick; $('#helpSave').onclick = () => AuroraReport.save({});
     $('#nav').onclick = (e) => { const b = e.target.closest('button[data-view]'); if (b) setView(b.dataset.view); };
+    $('#modes').onclick = (e) => { const b = e.target.closest('[data-mode=audit]'); if (b) setView('audit'); };
     renderStudios();
     await scanTabs(); await loadRuns(); await loadRows();
     // jump to the platform of the most recently used tab
     if (S.tabs[0]) S.platform = S.tabs[0].platform;
     await pickDefaultTab(); render(); renderLive();
     const v = (location.hash || '').replace('#', '');
-    setView(['extract', 'results', 'studios', 'help'].includes(v) ? v : 'extract');
+    setView(['extract', 'audit', 'results', 'studios', 'help'].includes(v) ? v : 'extract');
     let t;
     chrome.storage.onChanged.addListener((ch) => {
       clearTimeout(t);

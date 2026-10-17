@@ -49,7 +49,7 @@ const stub = ([runs, rows, tabs, vrows, arows]) => {
 
   let { pg, errs } = await open('dashboard.html', libs);
   check('dashboard loads with no script errors', errs.length === 0);
-  check('all three platforms are offered', (await pg.$$('.plat')).length === 3);
+  check('all three platforms are offered', (await pg.$$('#platforms .plat')).length === 3);
   check('the tab the user is on is auto-selected with a detected-page badge', /Group members/.test(await pg.textContent('.tabrow')) && (await pg.getAttribute('.plat[data-p=facebook]', 'aria-pressed')) === 'true');
   await pg.screenshot({ path: path.join(OUT, '1-extract.png'), fullPage: true });
   check('step 3 offers kinds, limit, speed, media', (await pg.$$('#kinds .chip')).length === 3 && !!(await pg.$('#oLimit')) && (await pg.$$('#oSpeed button')).length === 3);
@@ -138,5 +138,22 @@ const stub = ([runs, rows, tabs, vrows, arows]) => {
   await pg.click('nav [data-view=results]'); await pg.waitForTimeout(250); await pg.click('.run[data-r=ra]'); await pg.waitForTimeout(300);
   await pg.screenshot({ path: path.join(OUT, '10-audit-dark.png'), fullPage: true });
   check('dark theme audit renders with no script errors', errs.length === 0 && !!(await pg.$('.audit .agauge')));
+
+  ({ pg, errs } = await open('dashboard.html', libs));
+  check('Extract page opens with two big choices: Collect data and Health check (NEW)', (await pg.$$('#modes .mode')).length === 2 && /Collect data/.test(await pg.textContent('#modes')) && /Health check/.test(await pg.textContent('#modes .mode[data-mode=audit]')) && /NEW/.test(await pg.textContent('#modes .mode[data-mode=audit]')));
+  check('the left menu has a Health check item with a "new" tag', /Health check/.test(await pg.textContent('nav [data-view=audit]')) && /new/i.test(await pg.textContent('nav [data-view=audit]')));
+  await pg.click('#modes [data-mode=audit]'); await pg.waitForTimeout(400);
+  check('clicking the Health check choice opens the Health check page', !(await pg.isHidden('#view-audit')) && (await pg.isHidden('#view-extract')) && /How healthy/.test(await pg.textContent('#view-audit h1')));
+  check('the page explains the five things it checks', (await pg.$$('#view-audit .lcard')).length === 5);
+  check('the page shows the platforms, the open tab and a Run button for a scoreable page', (await pg.$$('#auditPlats .plat')).length === 3 && !!(await pg.$('#auditTabs .tabrow')) && !!(await pg.$('#auditGo')));
+  await pg.screenshot({ path: path.join(OUT, '11-health-check-page.png'), fullPage: true });
+  await pg.click('#aSpeed [data-s=gentle]'); await pg.click('#auditGo'); await pg.waitForTimeout(250);
+  const hs = await pg.evaluate(() => window.__sent.filter((m) => m.type === 'startRun').pop());
+  check('Run health check from its own page starts the audit (30 posts, chosen pacing)', hs && hs.kind === 'audit' && hs.opts.limit === 30 && hs.opts.delayMs === 2200 && /Health check/.test(hs.label));
+  await pg.click('nav [data-view=extract]'); await pg.waitForTimeout(150);
+  await pg.click('nav [data-view=audit]'); await pg.waitForTimeout(300);
+  check('the menu item opens the same page', !(await pg.isHidden('#view-audit')));
+  check('no script errors on the Health check page', errs.length === 0, errs.join(' | '));
+  await pg.close();
   await browser.close(); done();
 })().catch((e) => { console.error(e); process.exit(1); });
