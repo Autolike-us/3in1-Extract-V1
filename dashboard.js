@@ -107,14 +107,13 @@
     host.innerHTML = `
       <div class="step"><span>3</span> What should we collect from “${h(page.label)}”?</div>
       <div class="card">
-        <div class="chips" style="margin-top:0" id="kinds">${page.kinds.map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}" ${k.goto ? 'title="We\'ll open the right page in this tab for you"' : ''}>${h(k.label)}${k.goto ? ' <small>↗</small>' : ''}</button>`).join('')}</div>
-        ${S.kind === 'audit' ? `<div class="opts"><div><label>What happens</label><div class="sub" style="font-size:14px;color:var(--ink)">Aurora Audit reads this profile and its latest ~30 posts, then scores the bio, link, posting rhythm, captions and engagement and lists your top fixes. It takes about a minute — keep this tab in front.</div></div>
-          <div><label>Speed</label><div class="seg" id="oSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div><div class="sub">Gentle is the kindest to your account.</div></div></div>` : `<div class="opts">
+        <div class="chips" style="margin-top:0" id="kinds">${page.kinds.filter((k) => k.id !== 'audit').map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}" ${k.goto ? 'title="We\'ll open the right page in this tab for you"' : ''}>${h(k.label)}${k.goto ? ' <small>↗</small>' : ''}</button>`).join('')}</div>
+        <div class="opts">
           <div><label for="oLimit">How many items (max)</label><input id="oLimit" type="number" min="1" max="50000" value="${S.opts.limit}"><div class="sub">We stop earlier if the page runs out.</div></div>
           <div><label>Speed</label><div class="seg" id="oSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div><div class="sub">Gentle is the kindest to your account.</div></div>
           <div><label>Media</label><label class="switch"><input id="oMedia" type="checkbox" ${S.opts.media ? 'checked' : ''}> Keep photo &amp; video links</label><div class="sub">Needed for the media ZIP download.</div></div>
-        </div>`}
-        <div class="actions"><button class="btn primary big" id="goBtn">${S.kind === 'audit' ? '▶ Run health check' : '▶ Start extracting'}</button><span class="note">You can stop any time — what's collected is kept.</span></div>
+        </div>
+        <div class="actions"><button class="btn primary big" id="goBtn">▶ Start extracting</button><span class="note">You can stop any time — what's collected is kept.</span></div>
       </div>`;
     $('#kinds').onclick = (e) => { const b = e.target.closest('[data-k]'); if (b) { S.kind = b.dataset.k; renderOpts(); } };
     $('#oSpeed').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { S.opts.speed = b.dataset.s; renderOpts(); } };
@@ -186,7 +185,8 @@
   function renderLive() { paintLive($('#liveCard')); paintLive($('#auditLive')); }
   function paintLive(el) {
     if (!el) return;
-    const r = S.runs.find((x) => x.status === 'running' || x.status === 'paused') || (S.justDone && S.runs.find((x) => x.id === S.justDone));
+    const mine = (x) => (x.kind === 'audit') === (el.id === 'auditLive'); // health-check progress lives on its own page
+    const r = S.runs.find((x) => mine(x) && (x.status === 'running' || x.status === 'paused')) || (S.justDone && S.runs.find((x) => x.id === S.justDone && mine(x)));
     if (!r) { el.hidden = true; return; }
     el.hidden = false;
     const live = r.status === 'running' || r.status === 'paused';
@@ -413,7 +413,6 @@
     $('#reportBtn').onclick = async () => toast((await AuroraReport.copy({})) ? 'Debug report copied — paste it in our Telegram channel' : 'Could not copy — use Help → Save as .txt');
     $('#helpReport').onclick = $('#reportBtn').onclick; $('#helpSave').onclick = () => AuroraReport.save({});
     $('#nav').onclick = (e) => { const b = e.target.closest('button[data-view]'); if (b) setView(b.dataset.view); };
-    $('#modes').onclick = (e) => { const b = e.target.closest('[data-mode=audit]'); if (b) setView('audit'); };
     renderStudios();
     await scanTabs(); await loadRuns(); await loadRows();
     // jump to the platform of the most recently used tab

@@ -26,7 +26,6 @@
           ['👍', 'People who reacted', 'Names + profile links of everyone who reacted', 'Open a post'],
           ['🤝', 'Friends, followers & following', 'Names, profile links, avatars — when the owner shows them', 'Profile → we open the tab for you'],
           ['🛍️', 'Marketplace', 'Listings, prices, locations, seller and all photos', 'Marketplace search or a listing'],
-          ['✦', 'Health check · Aurora Audit', 'A 0–100 score for the bio, link, posting rhythm, captions and engagement — with your top fixes', 'Open a page or profile'],
         ],
       },
       instagram: {
@@ -47,7 +46,6 @@
           ['🗣️', 'People who commented', 'One row per person with comment count and sample', 'Open a post or reel'],
           ['❤️', 'People who liked', 'Everyone Instagram lets you see who liked', 'Open a post or reel'],
           ['#️⃣', 'Hashtags', 'Top posts on a hashtag page', 'instagram.com/explore/tags/…'],
-          ['✦', 'Health check · Aurora Audit', 'A 0–100 score for the bio, link, posting rhythm, hashtags and engagement — with your top fixes', 'Open a profile'],
         ],
       },
       tiktok: {
@@ -68,7 +66,6 @@
           ['🗣️', 'People who commented', 'One row per person with comment count and sample', 'Open a video'],
           ['⬇️', 'Single video', 'Full record + downloadable file', 'Open a video'],
           ['🔖', 'Hashtags & search', 'Videos on a hashtag or search page', 'tiktok.com/tag/… or search'],
-          ['✦', 'Health check · Aurora Audit', 'A 0–100 score for the bio, link, posting rhythm, hashtags and engagement — with your top fixes', 'Open a profile'],
         ],
       },
     },

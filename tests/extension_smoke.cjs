@@ -70,10 +70,12 @@ const cdn = https.createServer({ key: fs.readFileSync(tmp + '/k.pem'), cert: fs.
   await dash.bringToFront(); await dash.click('nav [data-view=extract]');
   await dash.click('[data-refresh]'); await dash.waitForTimeout(800);
   await dash.click('.tabrow'); await dash.waitForTimeout(500);
-  const achips = await dash.$$eval('#kinds .chip', (c) => c.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
-  if (!achips.some((c) => /Health check/.test(c))) throw new Error('no Health check chip on a page: ' + achips);
-  await dash.click('#kinds [data-k=audit]'); await dash.click('#goBtn');
-  await dash.waitForFunction(() => /Done[\s\S]*Health check/.test(document.querySelector('#liveCard')?.textContent || ''), null, { timeout: 60000 });
+  await dash.click('nav [data-view=audit]'); await dash.waitForTimeout(600);
+  await dash.click('[data-arefresh]'); await dash.waitForTimeout(800);
+  await dash.click('#auditTabs .tabrow'); await dash.waitForTimeout(500);
+  if (!(await dash.$('#auditGo'))) throw new Error('no Run health check button on the Health check page: ' + (await dash.textContent('#view-audit')).slice(0, 300));
+  await dash.click('#auditGo');
+  await dash.waitForFunction(() => /Done[\s\S]*Health check/.test(document.querySelector('#auditLive')?.textContent || ''), null, { timeout: 60000 });
   await dash.click('nav [data-view=results]'); await dash.waitForTimeout(500);
   await dash.click('.run:first-child'); await dash.waitForTimeout(400);
   const score = await dash.textContent('.agauge b').catch(() => null);
