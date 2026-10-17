@@ -6,7 +6,7 @@ globalThis.AuroraReport = {
     const m = chrome.runtime.getManifest();
     const { runs = [], debugLog = [] } = await chrome.storage.local.get(['runs', 'debugLog']);
     const pick = runId ? runs.filter((r) => r.id === runId) : runs.slice(0, 6);
-    const head = ['Aurora Extract debug report', `${m.name} v${m.version}`, `Generated: ${new Date().toISOString()}`, `Browser: ${navigator.userAgent}`, ''];
+    const head = ['Aurora Extract debug report (post it in Telegram: Aurora Studios Report, or email support@getaurorastudios.com)', `${m.name} v${m.version}`, `Generated: ${new Date().toISOString()}`, `Browser: ${navigator.userAgent}`, ''];
     const sect = pick.map((r) => [
       `RUN ${r.id}: ${r.label} — ${r.status}, ${r.count || 0} rows${r.error ? ', ERROR: ' + r.error : ''}`,
       `  kind=${r.kind} limit=${r.opts && r.opts.limit} delay=${r.opts && r.opts.delayMs}ms started=${new Date(r.startedAt).toISOString()}`,

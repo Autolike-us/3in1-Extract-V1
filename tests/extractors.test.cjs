@@ -202,6 +202,59 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   check('IG likers via API: users with profile links', lk.likers.length === 2 && lk.likers[1].verified === true && lk.likers[0].profileUrl.endsWith('/u1/'));
   check('IG commenters: aggregated per user with profile link', lk.commenters.length === 2 && lk.commenters[0].username === 'zed' && lk.commenters[0].comments === 2 && lk.commenters[0].profileUrl === 'https://www.instagram.com/zed/');
 
+  // ---- facebook: feed that only grows when an INNER container scrolls (window doesn't) + video posts
+  await load('https://www.facebook.com/profile.php?id=1', `<style>html,body{overflow:hidden;height:100%;margin:0}#sc{height:500px;overflow-y:auto}</style><div id="sc"><div role="main" id="feed"></div></div>
+    <script id="d" type="application/json">{"__bbox":{"result":{"data":{"video":{"id":"5550001","playable_url":"https:\\/\\/video.fbcdn.net\\/sd.mp4?x=1\\u0026y=2","browser_native_hd_url":"https:\\/\\/video.fbcdn.net\\/hd.mp4?x=1\\u0026y=2"}}}}}</script>`, ...F, 'content/facebook.js');
+  const scr = await pg.evaluate(async () => {
+    AuroraX.sleep = () => new Promise((r) => setTimeout(r, 5));
+    const feed = document.getElementById('feed'), sc = document.getElementById('sc'); let n = 0;
+    const add = () => { for (let i = 0; i < 3 && n < 12; i++, n++) { const d = document.createElement('div'); d.setAttribute('role', 'article'); d.style.height = '300px'; d.innerHTML = n === 1 ? `<h3><a href="https://www.facebook.com/x">X</a></h3><a href="https://www.facebook.com/x/videos/5550001/"><span>1d</span></a><div dir="auto">video post ${n}</div><video></video>` : `<h3><a href="https://www.facebook.com/x">X</a></h3><a href="https://www.facebook.com/x/posts/${1000 + n}"><span>2h</span></a><div dir="auto">post number ${n}</div>`; feed.appendChild(d); } };
+    add(); sc.addEventListener('scroll', () => { if (sc.scrollTop + sc.clientHeight > sc.scrollHeight - 700) add(); });
+    const rows = []; let warning = ''; const logs = [];
+    const ctx = { opts: {}, limit: 10, stopped: () => false, count: () => rows.length, pause: () => new Promise((r) => setTimeout(r, 15)), log: (l, m) => logs.push(m), setWarning: (w) => { warning = w; }, progress() {}, emit(r) { for (const x of [].concat(r)) if (rows.length < 10) rows.push(x); return 1; } };
+    AuroraX.log = ctx.log;
+    await AuroraX.platforms.facebook.tasks.posts(ctx);
+    return { rows, logs, warning };
+  });
+  check('FB posts: finds the inner scroll container and reaches the limit (10, not 3)', scr.rows.length === 10);
+  const vp = scr.rows.find((r) => /video post/.test(r.text));
+  check('FB video post: real video file from page data (HD preferred, URL unescaped)', vp && vp.media[0].type === 'video' && vp.media[0].url === 'https://video.fbcdn.net/hd.mp4?x=1&y=2' && !vp.videoMissing);
+
+  await load('https://www.facebook.com/x', '', ...F);
+  await pg.evaluate(() => { const body = JSON.stringify({ data: { node: { __typename: 'Video', id: '777000111', browser_native_sd_url: 'https://v/sd.mp4', browser_native_hd_url: 'https://v/hd.mp4' } }, pad: 'x'.repeat(40) }); window.fetch = async () => ({ ok: true, url: 'https://www.facebook.com/api/graphql/', clone() { return { text: async () => body }; } }); });
+  await pg.addScriptTag({ content: read('content/fb-sniffer.js') });
+  const fbs = await pg.evaluate(async () => {
+    const got = []; document.addEventListener('aurora-fb-media', (e) => got.push(...JSON.parse(e.detail)));
+    await fetch('https://www.facebook.com/api/graphql/'); await new Promise((r) => setTimeout(r, 50));
+    return got;
+  });
+  check('fb-sniffer reports each video id with its best (HD) file', fbs.length === 1 && fbs[0].id === '777000111' && fbs[0].url === 'https://v/hd.mp4');
+
+  // ---- tiktok: sniffer + captured records give real files without any page fetch
+  await load('https://www.tiktok.com/@chef', '', ...F);
+  await pg.evaluate(() => { const body = JSON.stringify({ itemList: [{ id: '111', desc: 'a #x', author: { uniqueId: 'chef' }, createTime: 1700000000, stats: { playCount: 5 }, video: { duration: 9, cover: 'https://c/1.jpg', playAddr: 'https://v16.tiktokcdn.com/111.mp4', downloadAddr: '' } }, { id: '222', desc: 'b', author: { uniqueId: 'chef' }, video: { cover: 'https://c/2.jpg', bitrateInfo: [{ PlayAddr: { UrlList: ['https://v16.tiktokcdn.com/222.mp4'] } }] } }] }); window.fetch = async () => ({ ok: true, url: 'https://www.tiktok.com/api/post/item_list/', clone() { return { text: async () => body }; } }); });
+  await pg.addScriptTag({ content: read('content/tt-sniffer.js') });
+  const tts = await pg.evaluate(async () => {
+    const got = []; document.addEventListener('aurora-tt-media', (e) => got.push(...JSON.parse(e.detail)));
+    await fetch('https://www.tiktok.com/api/post/item_list/'); await new Promise((r) => setTimeout(r, 50));
+    return got;
+  });
+  check('tt-sniffer captures every video in a list response', tts.length === 2 && tts[1].video.bitrateInfo[0].PlayAddr.UrlList[0].includes('222.mp4'));
+
+  await load('https://www.tiktok.com/@chef', `<div data-e2e="user-post-item-list"><div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/111"><img alt="a" src="https://x/1.jpg"></a></div><div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/222"><img alt="b" src="https://x/2.jpg"></a></div></div>`, ...F, 'content/tiktok.js');
+  const ttc = await pg.evaluate(async (items) => {
+    AuroraX.sleep = () => Promise.resolve();
+    document.dispatchEvent(new CustomEvent('aurora-tt-media', { detail: JSON.stringify(items) }));
+    window.fetch = async () => { throw new Error('page fetch must not be needed'); };
+    const rows = []; const ctx = { opts: { media: true }, limit: 5, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log() {}, setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.tiktok.tasks.videos(ctx); return rows;
+  }, tts);
+  check('TikTok videos: real .mp4 from captured page data (no fetch), stats merged', ttc.length === 2 && ttc[0].media[0].type === 'video' && /111\.mp4/.test(ttc[0].media[0].url) && ttc[0].plays === 5 && /222\.mp4/.test(ttc[1].media[0].url));
+  const diag = await pg.evaluate(async () => { document.dispatchEvent(new CustomEvent('x')); const logs = []; window.fetch = async () => ({ ok: true, text: async () => '<html><body>verify you are human captcha</body></html>' }); const rows = []; const ctx = { opts: { media: true }, limit: 5, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m) => logs.push(m), setWarning(w) { logs.push('WARN ' + w); }, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    document.body.innerHTML = '<div data-e2e="user-post-item-list"><div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/999"><img alt="z" src="https://x/z.jpg"></a></div></div>';
+    await AuroraX.platforms.tiktok.tasks.videos(ctx); return { logs, rows }; });
+  check('TikTok videos: when no file is available it says why (page size, scopes, verification) and flags the row', /video data not found \(html \d+b/.test(diag.logs.join(' ')) && /verification page/.test(diag.logs.join(' ')) && diag.rows[0].videoMissing === true && diag.logs.some((l) => /^WARN .*cover picture only/.test(l)));
+
   // ---- instagram: API failure → page-reading fallback, reels resolve to real video files
   await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/thumb1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/thumb2.jpg"></a>`, ...F, 'content/instagram.js');
   const fb = await pg.evaluate(async () => {

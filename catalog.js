@@ -4,6 +4,8 @@
   const SITE = 'https://getaurorastudios.com/';
   const C = {
     site: SITE,
+    telegram: 'https://t.me/+GqmNSvnMJxhhMzJh',
+    supportEmail: 'support@getaurorastudios.com',
     platforms: {
       facebook: {
         name: 'Facebook', color: '#1877f2', match: ['https://*.facebook.com/*'],

@@ -172,3 +172,5 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 .tile .where{display:block;margin-top:10px;color:var(--accent);font-weight:600;font-size:12px}
 .chip small{opacity:.7}
+
+a.ghost{display:block;text-align:center;text-decoration:none}
