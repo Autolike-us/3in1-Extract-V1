@@ -14,6 +14,11 @@
     return { label: 'TikTok', primary: null, kinds: [] };
   }
 
+  /* video records captured from TikTok's own list requests (tt-sniffer.js) */
+  const CAPTURED = {};
+  document.addEventListener('aurora-tt-media', (e) => { try { for (const it of JSON.parse(e.detail)) CAPTURED[it.id] = it; } catch (_) {} });
+  document.dispatchEvent(new CustomEvent('aurora-tt-replay'));
+
   function state() {
     const j = A.scriptJSON('__UNIVERSAL_DATA_FOR_REHYDRATION__') || A.scriptJSON('SIGI_STATE') || {};
     return j.__DEFAULT_SCOPE__ || j;
@@ -50,8 +55,8 @@
   /* ---------- page data (TikTok is a single-page app: the embedded JSON goes stale after in-app navigation) ---------- */
   function parseState(html) {
     const m = html.match(/<script[^>]+id="(?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE)"[^>]*>([\s\S]*?)<\/script>/);
-    if (!m) return {};
-    try { const j = JSON.parse(m[1]); return j.__DEFAULT_SCOPE__ || j; } catch (_) { return {}; }
+    if (!m) return { __none: 'no state script' };
+    try { const j = JSON.parse(m[1]); return j.__DEFAULT_SCOPE__ || j; } catch (_) { return { __none: 'state not JSON' }; }
   }
   /** Embedded state if it matches what the URL says we're on, otherwise a fresh copy of this page. */
   async function freshState(ok, ctx) {
@@ -95,9 +100,14 @@
   async function videoRecord(handle, id) {
     const r = await fetch(`https://www.tiktok.com/@${encodeURIComponent(handle)}/video/${id}`, { credentials: 'include' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const st = parseState(await r.text());
-    const it = st['webapp.video-detail'] && st['webapp.video-detail'].itemInfo && st['webapp.video-detail'].itemInfo.itemStruct;
-    if (!it || String(it.id) !== String(id)) throw new Error('video data not found');
+    const html = await r.text();
+    const st = parseState(html);
+    let it = st['webapp.video-detail'] && st['webapp.video-detail'].itemInfo && st['webapp.video-detail'].itemInfo.itemStruct;
+    if ((!it || String(it.id) !== String(id)) && st.ItemModule && st.ItemModule[id]) it = st.ItemModule[id];
+    if (!it || String(it.id) !== String(id)) {
+      const vd = st['webapp.video-detail'];
+      throw new Error(`video data not found (html ${html.length}b, ${st.__none || 'scopes: ' + Object.keys(st).slice(0, 6).join('/')}${vd && vd.statusCode != null ? ', status ' + vd.statusCode : ''}${/captcha|verify/i.test(html.slice(0, 5000)) ? ', verification page' : ''})`);
+    }
     return mapVideo(it);
   }
 
@@ -124,21 +134,22 @@
       let added = 0;
       for (const row of fresh) {
         if (ctx.stopped() || ctx.count() >= ctx.limit) break;
-        if (wantMedia && fails < 3) {
+        if (wantMedia && (CAPTURED[row.id] || fails < 3)) {
           try {
-            const rec = await videoRecord(row.author, row.id);
+            const rec = CAPTURED[row.id] ? mapVideo(CAPTURED[row.id]) : await videoRecord(row.author, row.id);
             Object.assign(row, { ...rec, id: row.id, url: rec.url || row.url, thumb: row.thumb });
             if (!rec.media.some((m) => m.type === 'video')) { noFile++; row.videoMissing = true; }
+            else ctx.log('info', 'video file ok via ' + (CAPTURED[row.id] ? 'page data' : 'video page'));
             fails = 0;
-          } catch (e) { fails++; ctx.log('warn', 'could not load video data: ' + e.message, fails >= 3 ? 'giving up on video files for this run — thumbnails only' : ''); }
-          await ctx.pause();
-        }
+          } catch (e) { fails++; noFile++; row.videoMissing = true; ctx.log('warn', 'could not load video data: ' + e.message, fails >= 3 ? 'giving up on video files for this run — thumbnails only' : ''); }
+          if (!CAPTURED[row.id]) await ctx.pause();
+        } else if (wantMedia) { noFile++; row.videoMissing = true; }
         added += ctx.emit(row);
         ctx.progress();
       }
       return added;
     } });
-    if (noFile && ctx.setWarning) ctx.setWarning(`${noFile} video${noFile > 1 ? 's' : ''} had no downloadable file (TikTok streams some videos in pieces) — only the cover picture was saved.`);
+    if (noFile && ctx.setWarning) ctx.setWarning(`${noFile} video${noFile > 1 ? 's' : ''} saved as a cover picture only — TikTok didn't expose the file. Reload the profile page, scroll down once so the videos load, then run again.`);
   }
 
   async function video(ctx) {

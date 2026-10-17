@@ -78,6 +78,7 @@ const stub = ([runs, rows, tabs]) => {
   await pg.click('nav [data-view=studios]');
   check('studios tab advertises all three paid extensions with tracked links', (await pg.$$('.studio')).length === 3 && (await pg.getAttribute('.studio a', 'href')).includes('utm_source=extract'));
   await pg.screenshot({ path: path.join(OUT, '4-studios.png') });
+  check('Telegram channel is linked from the sidebar and the Help page', (await pg.getAttribute('#tgBtn', 'href')).includes('t.me/+GqmNSvnMJxhhMzJh') && (await pg.$$('a[href*="t.me/+GqmNSvnMJxhhMzJh"]')).length >= 2);
   await pg.click('nav [data-view=help]'); check('help states the data never leaves the computer', /never leaves your computer/.test(await pg.textContent('#view-help')));
 
   // dark + mobile-ish width

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aurora Extract \u2014 Facebook, Instagram & TikTok data",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Free 3-in-1 extractor: collect public profile, group, Marketplace, post, comment and follower data from Facebook, Instagram and TikTok. Export to CSV, Excel or JSON and download media.",
   "permissions": [
     "storage",
@@ -41,6 +41,26 @@
     "128": "icons/icon128.png"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://*.tiktok.com/*"
+      ],
+      "js": [
+        "content/tt-sniffer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.facebook.com/*"
+      ],
+      "js": [
+        "content/fb-sniffer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://*.instagram.com/*"

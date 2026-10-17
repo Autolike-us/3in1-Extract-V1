@@ -5,6 +5,34 @@
   const A = globalThis.AuroraX;
   if (!A) return;
 
+  /* Video file addresses: captured from Facebook's own page data (fb-sniffer.js) and scanned from inline page JSON. */
+  const VIDEOS = {};
+  const RANK = { browser_native_hd_url: 4, playable_url_quality_hd: 3, browser_native_sd_url: 2, playable_url: 1 };
+  const addVideo = (id, url, q) => { if (id && url && (!VIDEOS[id] || VIDEOS[id].q < q)) VIDEOS[id] = { url, q }; };
+  document.addEventListener('aurora-fb-media', (e) => { try { for (const v of JSON.parse(e.detail)) addVideo(v.id, v.url, v.q); } catch (_) {} });
+  document.dispatchEvent(new CustomEvent('aurora-fb-replay'));
+  const scanned = new WeakSet();
+  function scanScripts() {
+    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url)":"((?:[^"\\]|\\.)+)"/g;
+    for (const sc of document.scripts) {
+      if (scanned.has(sc)) continue; scanned.add(sc);
+      const t = sc.textContent || '';
+      if (t.indexOf('playable_url') < 0 && t.indexOf('browser_native') < 0) continue;
+      let m; re.lastIndex = 0;
+      while ((m = re.exec(t))) {
+        const ids = Array.from(t.slice(Math.max(0, m.index - 900), m.index).matchAll(/"(?:id|video_id)":"(\d{6,})"/g));
+        if (!ids.length) continue;
+        let url; try { url = JSON.parse('"' + m[2] + '"'); } catch (_) { url = m[2].replace(/\\\//g, '/'); }
+        addVideo(ids[ids.length - 1][1], url, RANK[m[1]]);
+      }
+    }
+  }
+  const videoIdsIn = (card) => {
+    const ids = new Set();
+    for (const a of A.qa('a[href]', card)) { const h = a.getAttribute('href') || ''; const m = h.match(/\/(?:videos|reel)\/(\d+)/) || h.match(/[?&](?:v|video_id)=(\d+)/); if (m) ids.add(m[1]); }
+    return Array.from(ids);
+  };
+
   const RESERVED = /^(groups|marketplace|watch|events|pages|gaming|stories|reel|reels|friends|bookmarks|settings|help|login|profile\.php|photo|photos|share|hashtag|search|notifications|messages|ads|policies|privacy|about|public|story\.php|permalink\.php)$/i;
   const POST_HREF = /\/(posts|videos|reel|watch|photo|permalink)[/?]|story_fbid|\/photo\.php|\/groups\/[^/]+\/(posts|permalink)\//;
 
@@ -57,8 +85,12 @@
       ...A.qa('video', art).filter((v) => /^https?:/.test(v.currentSrc || v.src || '')).map((v) => ({ type: 'video', url: v.currentSrc || v.src })),
     ]);
     const c = A.contacts(text);
+    const vids = videoIdsIn(art), hasVideoEl = !!A.q('video', art);
+    let videoMissing = false;
+    for (const id of vids) { if (VIDEOS[id]) media.unshift({ type: 'video', url: VIDEOS[id].url }); else videoMissing = true; }
+    if (hasVideoEl && !vids.length) videoMissing = true;
     return {
-      id: url || undefined, url,
+      id: url || undefined, url, ...(vids.length ? { videoIds: vids } : {}), ...(videoMissing ? { videoMissing: true } : {}),
       author: A.txt(authorEl), authorUrl: authorEl ? A.abs(authorEl.href.split('?')[0]) : '',
       text, postedAt: times[0] || '',
       reactions: reactions ? A.parseCount(reactions.getAttribute('aria-label')) || A.parseCount(A.txt(reactions)) : null,
@@ -91,9 +123,12 @@
 
   async function posts(ctx) {
     const seen = new Set();
-    let pull = 0;
+    let pull = 0, missing = 0;
     const log = (...a) => ctx.log && ctx.log(...a);
+    const lastArticle = () => { const l = articleList(); return l[l.length - 1]; };
+    scanScripts();
     await A.scrollCollect(ctx, () => {
+      scanScripts();
       let added = 0, empty = 0, dup = 0;
       const arts = articleList();
       const cards = arts.length < 3 ? permalinkCards() : [];
@@ -103,12 +138,14 @@
         if (!row.url && !row.text && !row.media.length) { empty++; continue; }
         if (seen.has(key)) { dup++; continue; }
         seen.add(key);
+        if (row.videoMissing) missing++;
         added += ctx.emit(row);
       }
       pull++;
-      if (pull <= 3 || pull % 5 === 0 || added === 0) log('info', `pull ${pull}: articles=${arts.length} permalinkCards=${cards.length} new=${added} empty=${empty} dup=${dup}`);
+      if (pull <= 3 || pull % 5 === 0 || added === 0) log('info', `pull ${pull}: hidden=${document.hidden} articles=${arts.length} permalinkCards=${cards.length} new=${added} empty=${empty} dup=${dup}`);
       ctx.progress(); return added;
-    }, { patience: 7 });
+    }, { patience: 8, nudge: () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
+    if (ctx.setWarning && missing) ctx.setWarning(`${missing} video post${missing > 1 ? 's' : ''} saved without the video file — Facebook didn't expose it. Reload the page, scroll down once so the videos load, then run again.`);
   }
 
   async function comments(ctx) {
