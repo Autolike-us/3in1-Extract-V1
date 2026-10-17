@@ -1,6 +1,6 @@
 # Chrome Web Store submission pack — Aurora Extract
 
-Everything below is ready to paste into the Developer Dashboard. Upload `dist/aurora-extract-0.3.2.zip` (built with `npm run package`).
+Everything below is ready to paste into the Developer Dashboard. Upload `dist/aurora-extract-0.3.3.zip` (built with `npm run package`).
 
 ## 0. Before you start (one time)
 - [ ] Publisher: you are signed in as **AutomAi**. The public developer name is what shoppers see — consider setting a display name that matches the brand (Account → Profile) so it reads "Aurora" / "Aurora Studios".

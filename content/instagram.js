@@ -12,6 +12,10 @@
   /* media addresses captured by ig-sniffer.js from Instagram's own page traffic */
   const CAPTURED = {};
   document.addEventListener('aurora-ig-media', (e) => { try { for (const m of JSON.parse(e.detail)) CAPTURED[m.code] = m.items; } catch (_) {} });
+  /* post numbers + profile objects the page already downloaded (ig-sniffer.js) — the audit reads these first, so it needs no extra requests */
+  const STATS = {}, PROFILES = {};
+  document.addEventListener('aurora-ig-stats', (e) => { try { for (const r of JSON.parse(e.detail)) STATS[r.code] = r; } catch (_) {} });
+  document.addEventListener('aurora-ig-profile', (e) => { try { Object.assign(PROFILES, JSON.parse(e.detail)); } catch (_) {} });
   document.dispatchEvent(new CustomEvent('aurora-ig-replay'));
   const NOT_USER = /^(p|reel|reels|tv|explore|accounts|direct|stories|about|developers|legal|web|challenge|oauth|emails|nametag|lite)$/i;
 
@@ -81,8 +85,8 @@
   }
 
   /* ---------- tasks ---------- */
-  async function fetchProfile(username) {
-    const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, { retries: 1, wait: 8000 });
+  async function fetchProfile(username, opt = { retries: 1, wait: 8000 }) {
+    const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, opt);
     if (!j.data || !j.data.user) throw new Error('Profile not found or not visible to your account.');
     return j.data.user;
   }
@@ -284,13 +288,47 @@
     await withFallback(ctx, 'likers', async () => { const j = await A.getJSON(`https://www.instagram.com/api/v1/media/${m.id}/likers/`, H, { retries: 1, wait: 8000 }); ctx.emit((j.users || []).map(mapUserBrief)); }, () => listDom(ctx, 'likers'));
   }
   async function commenters(ctx) { await A.commenters(ctx, comments); }
-  async function audit(ctx) { await A.runAudit(ctx, { platform: 'instagram', profile, posts, nPosts: 30, media: false }); }
+  /* ---- audit: use what Instagram's own page already loaded; only ask the site as a fallback ---- */
+  function mapStat(s) {
+    const cap = s.caption || '', reel = s.product_type === 'clips';
+    return { id: s.pk || s.code, url: `https://www.instagram.com/${reel ? 'reel' : 'p'}/${s.code}/`, type: reel ? 'reel' : s.carousel ? 'carousel' : s.media_type === 2 ? 'video' : 'photo', author: s.user,
+      caption: cap, hashtags: cap.match(/#[\p{L}\p{N}_]+/gu) || [], mentions: cap.match(/@[\w.]+/g) || [], likes: s.like_count, comments: s.comment_count, plays: s.play_count,
+      postedAt: s.taken_at ? new Date(s.taken_at * 1000).toISOString() : '', media: [] };
+  }
+  async function auditProfile(ctx) {
+    const user = currentUser().toLowerCase();
+    let apiErr = '';
+    try { ctx.emit(mapProfile(await fetchProfile(currentUser(), { retries: 0 }))); return; } catch (e) { apiErr = e.message; }
+    const cap = PROFILES[user];
+    if (cap) { ctx.log('info', 'audit: profile read from the page\'s own data (' + apiErr + ')'); ctx.emit(mapProfile(cap)); return; }
+    ctx.log('warn', 'audit: no page data for the profile (' + apiErr + ') — reading the page');
+    await profileDom(ctx);
+  }
+  async function auditPosts(ctx) {
+    const user = currentUser().toLowerCase();
+    const mine = () => Object.values(STATS).filter((r) => !r.user || String(r.user).toLowerCase() === user).sort((a, b) => b.taken_at - a.taken_at);
+    let idle = 0, last = mine().length;
+    for (let i = 0; i < 14 && mine().length < ctx.limit && idle < 3 && !ctx.stopped(); i++) {
+      await A.waitVisible(ctx);
+      const el = document.scrollingElement || document.documentElement;
+      el.scrollBy({ top: Math.max(500, innerHeight * 0.9), behavior: 'auto' });
+      await A.sleep(1100);
+      const n = mine().length; idle = n > last ? 0 : idle + 1; last = n;
+      ctx.progress(`Reading posts (${n})…`);
+    }
+    const list = mine().slice(0, ctx.limit);
+    if (list.length >= 3) { ctx.log('info', `audit: ${list.length} posts read from the page's own data`); ctx.emit(list.map(mapStat)); return; }
+    ctx.log('warn', `audit: the page loaded only ${list.length} post(s) with numbers — asking the site / reading the grid`);
+    await posts(ctx);
+  }
+  const igReady = () => { const hd = A.q('header'); return !!hd && /followers|posts/i.test(hd.innerText || '') && (A.meta('og:description') || PROFILES[currentUser().toLowerCase()]); };
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'instagram', profile: auditProfile, posts: auditPosts, nPosts: 30, media: false, ready: igReady }); }
   async function hashtag(ctx) { await gridDom(ctx, decodeURIComponent(location.pathname.split('/')[3] || '')); }
 
   A.register('instagram', {
     name: 'Instagram', hosts: /(^|\.)instagram\.com$/, detect,
     kinds: ['profile', 'posts', 'followers', 'following', 'comments', 'commenters', 'likers', 'post', 'hashtag', 'audit'],
     tasks: { profile, posts, followers: listTask('followers'), following: listTask('following'), comments, commenters, likers, post, hashtag, audit },
-    _test: { mapPost, mapProfile, mapComment, mapUserBrief, shortcodeToId, detect },
+    _test: { mapPost, mapProfile, mapComment, mapUserBrief, shortcodeToId, detect, mapStat },
   });
 })();

@@ -196,7 +196,7 @@
   }
 
   async function commenters(ctx) { await A.commenters(ctx, comments); }
-  async function audit(ctx) { await A.runAudit(ctx, { platform: 'tiktok', profile, posts: videos, nPosts: 24, media: true }); }
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'tiktok', profile, posts: videos, nPosts: 24, media: true, ready: () => !!A.q('[data-e2e="user-title"]') && !!A.q('[data-e2e="followers-count"], [data-e2e="user-bio"]') && !!findGrid() }); }
 
   /** Followers / following: ONLY rows inside the profile's list popup. */
   async function followList(ctx, which) {

@@ -384,7 +384,7 @@
     ctx.emit({ id: location.pathname.split('/')[2], name, url: location.href.split('?')[0], members: A.parseCount(members), privacy, activity: posts, about: (A.meta('og:description') || '').slice(0, 600), media: A.meta('og:image') ? [{ type: 'image', url: A.meta('og:image') }] : [] });
   }
 
-  async function audit(ctx) { await A.runAudit(ctx, { platform: 'facebook', profile: pageInfo, posts, nPosts: 20, media: false }); }
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'facebook', profile: pageInfo, posts, nPosts: 20, media: false, ready: () => { const m = A.q('[role="main"]') || document.body, t = m.innerText || ''; return !!A.q('h1') && t.length > 250 && /follower|like|people follow this|About|Posts/i.test(t); } }); }
 
   A.register('facebook', {
     name: 'Facebook', hosts: /(^|\.)facebook\.com$/, detect,

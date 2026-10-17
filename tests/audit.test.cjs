@@ -66,17 +66,35 @@ const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
     const u = r.request().url();
     if (u.includes('web_profile_info')) return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { user: igUser } }) });
     if (u.includes('/feed/user/')) return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: feed, more_available: false }) });
-    return r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>t</title><body></body>' });
+    return r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>t</title><meta property="og:description" content="8,000 Followers, 90 Following, 200 Posts"><body><header><section><h2>acme</h2><ul><li>200 posts</li><li>8,000 followers</li></ul></section></header></body>' });
   });
   await pg.goto('https://www.instagram.com/acme/'); await pg.evaluate(stub);
   for (const f of ['content/common.js', 'core/audit.js', 'content/instagram.js']) await pg.addScriptTag({ content: read(f) });
   const ig = await pg.evaluate(async (m) => { const { ctx, rows, logs } = eval(m); await AuroraX.platforms.instagram.tasks.audit(ctx); return { rows, logs }; }, mk);
   const igRow = ig.rows[0];
   check('Instagram audit: one report row built from the profile and the latest posts', ig.rows.length === 1 && igRow.username === 'acme' && igRow.audit.stats.postsAnalysed === 12 && igRow.audit.stats.followers === 8000 && igRow.score > 60, JSON.stringify({ n: ig.rows.length, score: igRow && igRow.score }));
+  // Instagram refuses the site API (429 / login page) -> the audit still works from what Instagram's own page loaded
+  const nodes = Array.from({ length: 10 }, (_, i) => ({ code: 'D' + i, pk: '5' + i, taken_at: Math.floor((NOW - i * 2 * DAY) / 1000), like_count: 150 + i, comment_count: 9, caption: { text: 'New roast in! Which one is yours? #coffee #roast #austin' }, media_type: 1, user: { username: 'acme' } }));
+  const gql = { data: { user: { ...igUser, username: 'acme', biography: 'Fresh coffee ☕ DM us to order', follower_count: 8000, following_count: 90, media_count: 200, category: 'Coffee shop', external_url: 'https://acme.example' }, xdt_api__v1__feed__user_timeline_graphql_connection: { edges: nodes.map((n) => ({ node: n })) } } };
+  await pg.unroute('**/*');
+  await pg.route('**/*', (r) => {
+    const u = r.request().url();
+    if (u.includes('web_profile_info')) return r.fulfill({ status: 429, contentType: 'application/json', body: '{"message":"rate limited"}' });
+    if (u.includes('/feed/user/')) return r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Login</title>' });
+    if (u.includes('/graphql/query')) return r.fulfill({ contentType: 'application/json', body: JSON.stringify(gql) });
+    return r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>t</title><meta property="og:description" content="8,000 Followers, 90 Following, 200 Posts"><body><header><section><h2>acme</h2><ul><li>200 posts</li><li>8,000 followers</li></ul></section></header></body>' });
+  });
+  await pg.goto('https://www.instagram.com/acme/'); await pg.evaluate(stub);
+  for (const f of ['content/ig-sniffer.js', 'content/common.js', 'core/audit.js', 'content/instagram.js']) await pg.addScriptTag({ content: read(f) });
+  await pg.evaluate(() => fetch('https://www.instagram.com/graphql/query', { method: 'POST' })); await pg.waitForTimeout(300);
+  const ig2 = await pg.evaluate(async (m) => { const { ctx, rows, logs } = eval(m); await AuroraX.platforms.instagram.tasks.audit(ctx); return { rows, logs }; }, mk);
+  const r2 = ig2.rows[0];
+  check('Instagram audit works from the page\'s own data when the site API says 429 / login (no extra requests needed)', ig2.rows.length === 1 && r2.audit.stats.postsAnalysed === 10 && r2.audit.stats.engagementRate > 1 && r2.audit.stats.postsPerWeek > 2 && r2.audit.stats.followers === 8000 && r2.audit.sections.find((s) => s.id === 'rhythm').score != null, JSON.stringify(r2 && r2.audit.stats));
+  check('the debug log says what was read (profile fields and post numbers)', ig2.logs.some((l) => /audit: read/.test(l) && /"withLikes":10/.test(l) && /"withDate":10/.test(l)));
   check('Instagram audit offers itself on profile pages', await pg.evaluate(() => AuroraX.platforms.instagram.detect(new URL('https://www.instagram.com/acme/')).kinds.some((k) => k.id === 'audit')));
 
   await pg.unroute('**/*');
-  await pg.route('**/*', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><title>t</title><body><div role="main"><h1>Acme Café</h1><a href="https://l.facebook.com/l.php?u=${encodeURIComponent('https://acme.example')}">acme.example</a><a href="mailto:hi@acme.example">mail</a><div>Page · Coffee shop</div><div>4.2K followers</div></div>
+  await pg.route('**/*', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><title>t</title><body><div role="main"><h1>Acme Café</h1><div>Acme Café is a neighbourhood coffee shop in Austin serving specialty coffee, fresh pastries and light lunches every day of the week. About · Posts · Photos · Videos · Reviews</div><a href="https://l.facebook.com/l.php?u=${encodeURIComponent('https://acme.example')}">acme.example</a><a href="mailto:hi@acme.example">mail</a><div>Page · Coffee shop</div><div>4.2K followers</div></div>
     <div role="feed"><div role="article"><h3><a href="https://www.facebook.com/acme.cafe">Acme Café</a></h3><a href="https://www.facebook.com/acme.cafe/posts/111"><span>2h</span></a><div data-ad-preview="message"><div dir="auto">Fresh croissants today — who wants one?</div></div><div aria-label="Like: 40 people">40</div><span>5 comments</span></div>
     <div role="article"><h3><a href="https://www.facebook.com/acme.cafe">Acme Café</a></h3><a href="https://www.facebook.com/acme.cafe/posts/112"><span>2d</span></a><div dir="auto">Closed Monday.</div><div aria-label="Like: 12 people">12</div></div>
     <div role="article"><h3><a href="https://www.facebook.com/acme.cafe">Acme Café</a></h3><a href="https://www.facebook.com/acme.cafe/posts/113"><span>5d</span></a><div dir="auto">New menu is out! Visit us.</div><div aria-label="Like: 25 people">25</div><span>2 comments</span></div></div></body>` }));
@@ -85,6 +103,8 @@ const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
   const fbr = await pg.evaluate(async (m) => { const { ctx, rows } = eval(m); ctx.limit = 20; await AuroraX.platforms.facebook.tasks.audit(ctx); return rows; }, mk);
   check('Facebook audit: report built from the page details and the posts on screen', fbr.length === 1 && fbr[0].name === 'Acme Café' && fbr[0].audit.stats.postsAnalysed >= 2 && fbr[0].audit.sections.find((s) => s.id === 'contact').score > 10, JSON.stringify(fbr[0] && fbr[0].audit && fbr[0].audit.stats));
   check('Facebook audit offers itself on page/profile pages', await pg.evaluate(() => AuroraX.platforms.facebook.detect(new URL('https://www.facebook.com/acme.cafe')).kinds.some((k) => k.id === 'audit')));
+  const st = await pg.evaluate(async (m) => { const { ctx } = eval(m); const t0 = Date.now(); const no = await AuroraX.settle(ctx, () => false, { timeout: 500, quiet: 10 }); const waited = Date.now() - t0; const yes = await AuroraX.settle(ctx, () => true, { timeout: 500, quiet: 10 }); return { no, yes, waited }; }, mk);
+  check('settle waits for the page, then gives up politely (never hangs) and returns at once when ready', st.no === false && st.waited >= 480 && st.waited < 2000 && st.yes === true);
   await browser.close();
   done();
 })();
