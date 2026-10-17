@@ -24,5 +24,29 @@ const ROOT = path.join(__dirname, '..');
   const rows = await dash.$$eval('tbody tr', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ')));
   if (rows.length !== 2 || !/Road bike/.test(rows[0])) throw new Error('rows: ' + JSON.stringify(rows));
   console.log('PASS results table has the 2 listings:', rows[0]);
+  // ---- navigation shortcut: on a group FEED, choose "Group members" → the extension opens /members itself and extracts there
+  await ctx.unroute('https://www.facebook.com/**');
+  await ctx.route('https://www.facebook.com/**', (r) => {
+    const u = new URL(r.request().url());
+    const body = /\/members/.test(u.pathname)
+      ? `<title>Members</title><div role="main"><div role="listitem"><a href="https://www.facebook.com/groups/9/user/555/">Ana Silva</a></div><div role="listitem"><a href="https://www.facebook.com/groups/9/user/556/">Li Wei</a></div></div>`
+      : `<title>Austin Bikers</title><div role="main"><h1>Austin Bikers</h1><div role="article"><h3><a href="https://www.facebook.com/bob">Bob</a></h3><div dir="auto">hello</div></div></div>`;
+    r.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html>${body}` });
+  });
+  await page.goto('https://www.facebook.com/groups/9/'); await page.waitForTimeout(800);
+  await dash.bringToFront(); await dash.click('nav [data-view=extract]');
+  await dash.click('[data-refresh]'); await dash.waitForTimeout(800);
+  await dash.click('.tabrow'); await dash.waitForTimeout(500);
+  const chips = await dash.$$eval('#kinds .chip', (c) => c.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
+  if (!chips.some((c) => /Group members/.test(c))) throw new Error('no Group members chip on the group feed: ' + chips);
+  console.log('PASS group feed offers:', chips.join(' | '));
+  await dash.click('#kinds [data-k=group_members]'); await dash.click('#goBtn');
+  await dash.waitForFunction(() => /Done[\s\S]*Group members/.test(document.querySelector('#liveCard')?.textContent || ''), null, { timeout: 60000 });
+  const url = page.url();
+  if (!/\/groups\/9\/members/.test(url)) throw new Error('tab was not navigated to the Members page: ' + url);
+  await dash.click('nav [data-view=results]'); await dash.waitForTimeout(500);
+  const gm = await dash.$$eval('tbody tr', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ')));
+  if (gm.length !== 2 || !/Ana Silva/.test(gm[0])) throw new Error('members rows: ' + JSON.stringify(gm));
+  console.log('PASS opened the Members tab by itself and extracted:', gm[0]);
   await ctx.close();
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });

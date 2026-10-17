@@ -63,6 +63,28 @@
     }
   };
 
+  /** Run a "comments" task and emit ONE row per commenting user (comment count, likes received, first/last, sample). */
+  A.commenters = async function (ctx, commentsTask) {
+    const map = new Map();
+    let total = 0;
+    const proxy = Object.create(ctx);
+    proxy.count = () => total;
+    proxy.emit = (rows) => {
+      for (const r of [].concat(rows)) {
+        const k = r && (r.author || r.username); if (!k) continue;
+        total++;
+        const e = map.get(k) || { id: k, username: k, name: r.authorName || '', profileUrl: r.authorUrl || '', comments: 0, likesOnComments: 0, firstComment: r.postedAt || '', lastComment: '', sample: '' };
+        e.comments++; e.likesOnComments += +r.likes || 0; e.lastComment = r.postedAt || e.lastComment; if (!e.sample) e.sample = String(r.text || '').slice(0, 160);
+        if (!e.profileUrl && r.authorUrl) e.profileUrl = r.authorUrl;
+        map.set(k, e);
+      }
+      return 1;
+    };
+    proxy.progress = (note) => ctx.progress(`${map.size} people from ${total} comments${note ? ' — ' + note : ''}`, map.size);
+    await commentsTask(proxy);
+    ctx.emit(Array.from(map.values()).sort((a, b) => b.comments - a.comments));
+  };
+
   A.mediaFromImgs = (el, minSize = 120) => A.qa('img', el)
     .filter((i) => (i.naturalWidth || i.width || 0) >= minSize && /^https?:/.test(i.src) && !/emoji|static\.|rsrc\.php|profile_pic_blank/.test(i.src))
     .map((i) => ({ type: 'image', url: i.currentSrc || i.src }));

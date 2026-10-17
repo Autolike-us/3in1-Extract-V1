@@ -169,3 +169,6 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 #toast.show{opacity:1;transform:translate(-50%,0)}
 
 @media (max-width:980px){.shell{grid-template-columns:1fr}aside{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;padding:14px}nav{display:flex;flex-wrap:wrap}.aside-foot{display:none}.results-grid{grid-template-columns:1fr}.live{grid-template-columns:1fr}}
+
+.tile .where{display:block;margin-top:10px;color:var(--accent);font-weight:600;font-size:12px}
+.chip small{opacity:.7}
