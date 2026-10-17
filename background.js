@@ -1,33 +1,43 @@
 /* Aurora Extract — service worker: run bookkeeping + local storage. Nothing is ever sent to a server. */
 'use strict';
 
-const FLUSH_MS = 700;
+const FLUSH_MS = 500;
 const buffers = new Map(); // runId -> rows[] not yet persisted
+const logBuf = [];         // log entries not yet persisted
 let flushTimer = null;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const get = async (k, d) => { const o = await chrome.storage.local.get(k); return o[k] === undefined ? d : o[k]; };
 
-async function logBg(level, m, d) { const dl = await get('debugLog', []); dl.push({ t: Date.now(), l: level, m, d: d || '' }); await chrome.storage.local.set({ debugLog: dl.slice(-800) }); }
+/** Every storage change is a read-modify-write, so they must never overlap (concurrent messages used to overwrite each other
+ *  and silently dropped log lines and rows). All writers go through this single queue. Never call lock() from inside lock(). */
+let chain = Promise.resolve();
+const lock = (fn) => { const r = chain.then(fn); chain = r.catch(() => {}); return r; };
 
-async function updateRun(runId, patch) {
+const logBg = (level, m, d) => { logBuf.push({ t: Date.now(), l: level, m, d: d || '' }); scheduleFlush(); };
+
+const updateRun = (runId, patch) => lock(async () => {
   const runs = await get('runs', []);
   const r = runs.find((x) => x.id === runId);
   if (!r) return null;
   Object.assign(r, patch);
   await chrome.storage.local.set({ runs });
   return r;
-}
+});
 
-async function flush() {
+/** Persist buffered rows + log lines (one queued job; safe to call any time). */
+const flush = () => lock(async () => {
   flushTimer = null;
+  const out = {};
+  if (logBuf.length) { const dl = await get('debugLog', []); out.debugLog = dl.concat(logBuf.splice(0)).slice(-800); }
   for (const [runId, rows] of Array.from(buffers)) {
     buffers.delete(runId);
     const key = 'rows:' + runId;
-    const cur = await get(key, []);
-    await chrome.storage.local.set({ [key]: cur.concat(rows) });
+    const cur = key in out ? out[key] : await get(key, []);
+    out[key] = cur.concat(rows);
   }
-}
+  if (Object.keys(out).length) await chrome.storage.local.set(out);
+});
 const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS); };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -46,9 +56,7 @@ async function navigate(tabId, url) {
 
 async function startRun({ tabId, kind, opts, label, platform, goto }) {
   const run = { id: uid(), platform, kind, label: label || kind, opts, tabId, status: 'running', count: 0, note: '', startedAt: Date.now(), finishedAt: null, error: null };
-  const runs = await get('runs', []);
-  runs.unshift(run);
-  await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] });
+  await lock(async () => { const runs = await get('runs', []); runs.unshift(run); await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] }); });
   let res;
   if (goto) { await logBg('info', 'navigating tab to start ' + kind, goto.replace(/\d{6,}/g, '<id>')); await updateRun(run.id, { note: 'Opening the right page…' }); try { await navigate(tabId, goto); } catch (e) { await logBg('error', 'navigation failed', String(e)); } }
   try { for (let i = 0; ; i++) { try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); break; } catch (e) { if (i >= 8) throw e; await sleep(1000); } } }
@@ -58,17 +66,18 @@ async function startRun({ tabId, kind, opts, label, platform, goto }) {
   return { ok: true, runId: run.id };
 }
 
-async function deleteRun(runId) {
+const deleteRun = (runId) => lock(async () => {
+  buffers.delete(runId);
   const runs = (await get('runs', [])).filter((r) => r.id !== runId);
   await chrome.storage.local.set({ runs });
   await chrome.storage.local.remove('rows:' + runId);
-}
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, send) => {
   (async () => {
     switch (msg && msg.type) {
       case 'rows': { const b = buffers.get(msg.runId) || []; b.push(...msg.rows); buffers.set(msg.runId, b); scheduleFlush(); return send({}); }
-      case 'log': { const dl = await get('debugLog', []); dl.push({ ...msg.entry, r: msg.runId }); await chrome.storage.local.set({ debugLog: dl.slice(-800) }); return send({}); }
+      case 'log': { logBuf.push({ ...msg.entry, r: msg.runId }); scheduleFlush(); return send({}); }
       case 'progress': await updateRun(msg.runId, { count: msg.count, note: msg.note || '' }); return send({});
       case 'done': {
         await flush();
