@@ -27,7 +27,7 @@ const RUNS = [
   { id: 'c', platform: 'instagram', kind: 'commenters', label: 'Instagram · People who commented', opts: { limit: 200 }, status: 'done', count: COMMENTERS.length, startedAt: Date.now() - 9000e3 },
 ];
 const stub = ([runs, rowsets, tabs, desc]) => {
-  const store = { runs, debugLog: [] }; for (const k in rowsets) store['rows:' + k] = rowsets[k];
+  const store = { runs, debugLog: [], prefs: { onboarded: true, seen: '0.4.0' } }; for (const k in rowsets) store['rows:' + k] = rowsets[k];
   window.chrome = {
     storage: { local: { get: async (k) => { const o = {}; [].concat(k || []).forEach((x) => { if (x in store) o[x] = store[x]; }); return o; }, set: async (o) => Object.assign(store, o), remove: async () => {} }, onChanged: { addListener() {} } },
     tabs: { query: async (q) => tabs.filter((t) => q.url && q.url.some((m) => t.url.includes(m.split('*.')[1].split('/')[0]))), sendMessage: async () => desc, create: async () => {}, reload() {}, onUpdated: { addListener() {} } },
