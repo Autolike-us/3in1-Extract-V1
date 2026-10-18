@@ -142,9 +142,10 @@ const stub = ([runs, rows, tabs, vrows, arows]) => {
   check('the page explains the five things it checks', (await pg.$$('#view-audit .lcard')).length === 5);
   check('the page shows the platforms, the open tab and a Run button for a scoreable page', (await pg.$$('#auditPlats .plat')).length === 3 && !!(await pg.$('#auditTabs .tabrow')) && !!(await pg.$('#auditGo')));
   await pg.screenshot({ path: path.join(OUT, '11-health-check-page.png'), fullPage: true });
-  await pg.click('#aSpeed [data-s=gentle]'); await pg.click('#auditGo'); await pg.waitForTimeout(250);
+  check('the Health check page lets the user choose how many posts to read (Quick 10 · Standard 20 · Deep 30, Standard preselected)', (await pg.$$('#aCount button')).length === 3 && (await pg.getAttribute('#aCount .on', 'data-n')) === '20');
+  await pg.click('#aCount [data-n="10"]'); await pg.click('#aSpeed [data-s=gentle]'); await pg.click('#auditGo'); await pg.waitForTimeout(250);
   const hs = await pg.evaluate(() => window.__sent.filter((m) => m.type === 'startRun').pop());
-  check('Run health check from its own page starts the audit (30 posts, chosen pacing)', hs && hs.kind === 'audit' && hs.opts.limit === 30 && hs.opts.delayMs === 2200 && /Health check/.test(hs.label));
+  check('Run health check starts the audit with the chosen number of posts and pacing', hs && hs.kind === 'audit' && hs.opts.limit === 10 && hs.opts.delayMs === 2200 && /Health check/.test(hs.label));
   check('Extract page shows no health-check progress card (it lives on the Health check page)', await pg.evaluate(() => document.querySelector('#liveCard').hidden));
   check('no script errors on the Health check page', errs.length === 0, errs.join(' | '));
   await pg.close();

@@ -175,6 +175,11 @@
     const log = (...a) => ctx.log && ctx.log(...a);
     const wantMedia = ctx.opts.media !== false;
     const slow = !!ctx.opts.slow;
+    /** Every post currently on screen has drawn its content (not an empty placeholder). */
+    const visibleReady = () => {
+      const vis = articleList().filter((a) => { const r = a.getBoundingClientRect(); return r.bottom > 80 && r.top < innerHeight - 80; });
+      return vis.length > 0 && vis.every((a) => (a.innerText || '').trim().length > 60);
+    };
     const lastArticle = () => { const l = articleList(); return l[l.length - 1]; };
     scanScripts();
     log('info', `video addresses known at start: ${Object.keys(VIDEOS).length}`);
@@ -215,7 +220,7 @@
         added += ctx.emit(row);
       }
       ctx.progress(); return added;
-    }, patience: slow ? 6 : 8, slow, nudge: slow ? null : () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
+    }, patience: slow ? 6 : 8, slow, hydrated: slow ? visibleReady : undefined, nudge: slow ? null : () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
     if (ctx.setWarning && missing) ctx.setWarning(`${missing} video post${missing > 1 ? 's' : ''} saved without the video file — Facebook didn't expose it. Reload the page, scroll down once so the videos load, then run again.`);
   }
 

@@ -121,6 +121,15 @@ const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
   const maxJump = Math.max.apply(null, sc.ys.slice(1).map((y, i) => Math.abs(y - sc.ys[i])));
   console.log('scroll positions', JSON.stringify(sc));
   check('slow scrolling never jumps more than a screen at a time and takes its time', sc.ys.length >= 4 && maxJump <= sc.vh && sc.secs >= 3);
+  // adaptive waiting: moves on as soon as the posts on screen have drawn, instead of sleeping a fixed time
+  const ad = await pg.evaluate(async () => {
+    document.body.innerHTML = '<div style="height:12000px"></div>'; window.scrollTo(0, 0);
+    const mkc = () => ({ stopped: () => false, count: () => 0, limit: 99, opts: { delayMs: 1200 }, pause: () => new Promise((r) => setTimeout(r, 5)), log() {} });
+    const run = async (hyd) => { window.scrollTo(0, 0); const ys = []; const t0 = Date.now(); await AuroraX.scrollCollect(mkc(), () => { ys.push(Math.round(scrollY)); return 0; }, { patience: 4, slow: true, hydrated: hyd }); return { n: ys.length, secs: (Date.now() - t0) / 1000 }; };
+    return { fast: await run(() => true), slowDraw: await run(() => false) };
+  });
+  console.log('adaptive', JSON.stringify(ad));
+  check('waits only as long as posts need: a page that is already drawn is read several times faster than one that never finishes drawing', ad.fast.secs < ad.slowDraw.secs / 2 && ad.fast.secs < 6);
   const st = await pg.evaluate(async (m) => { const { ctx } = eval(m); const t0 = Date.now(); const no = await AuroraX.settle(ctx, () => false, { timeout: 500, quiet: 10 }); const waited = Date.now() - t0; const yes = await AuroraX.settle(ctx, () => true, { timeout: 500, quiet: 10 }); return { no, yes, waited }; }, mk);
   check('settle waits for the page, then gives up politely (never hangs) and returns at once when ready', st.no === false && st.waited >= 480 && st.waited < 2000 && st.yes === true);
   await browser.close();

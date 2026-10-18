@@ -3,7 +3,7 @@
 Open https://chrome.google.com/webstore/devconsole , sign in as the AutomAi publisher, then paste these one at a time (new chat per prompt is fine).
 
 ## Prompt 0 - upload (do this by hand, 1 minute)
-Dashboard -> **Add new item** -> choose `1-UPLOAD-THIS/aurora-extract-0.3.4.zip`. Claude cannot pick local files, so do this yourself. You land on the item's edit page.
+Dashboard -> **Add new item** -> choose `1-UPLOAD-THIS/aurora-extract-0.3.5.zip`. Claude cannot pick local files, so do this yourself. You land on the item's edit page.
 
 ## Prompt 1 - Account / profile check
 ```

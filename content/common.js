@@ -57,8 +57,9 @@
     return true;
   };
 
-  A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process, nudge, slow } = {}) {
+  A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process, nudge, slow, hydrated } = {}) {
     let idle = 0, scroller = container || null, logged = 0;
+    const k = Math.max(0.5, Math.min(2, (Number(ctx.opts && ctx.opts.delayMs) || 1200) / 1200)); // user's pace: Gentle 1.8 · Normal 1 · Fast 0.5
     const de = () => document.scrollingElement || document.documentElement;
     const step = (el, dy) => { const before = el.scrollTop; el.scrollBy({ top: dy, behavior: 'auto' }); return el.scrollTop !== before; };
     /** The element that actually scrolls: the page itself, or (Facebook etc.) the biggest scrollable container. */
@@ -78,19 +79,21 @@
       idle = added > 0 ? 0 : idle + 1;
       if (idle >= patience) break;
       const el = scroller || de();
-      // slow mode (Facebook): half a screen at a time, so each post has time to draw before we move on; if nothing new appeared, back up a little and come forward again
-      const dy = slow ? Math.round((container ? container.clientHeight : innerHeight) * 0.5) : Math.max(500, (container ? container.clientHeight : innerHeight) * 0.9);
-      if (slow && idle >= 1) {
+      // slow mode (Facebook): a bit less than a screen at a time, then wait only as long as the posts on screen need to draw
+      const frac = k <= 0.6 ? 0.8 : k >= 1.8 ? 0.45 : 0.6;
+      const dy = slow ? Math.round((container ? container.clientHeight : innerHeight) * frac) : Math.max(500, (container ? container.clientHeight : innerHeight) * 0.9);
+      if (slow && idle >= 1) { // nothing new drew: back up a little and come forward again
         const up = Math.round(innerHeight * (idle >= 3 ? 1.6 : 0.8));
-        const b0 = el.scrollTop; step(el, -up); const back = b0 - el.scrollTop; await A.sleep(900 + Math.random() * 400);
-        if (back > 0) step(el, back); await A.sleep(700 + Math.random() * 300);
+        const b0 = el.scrollTop; step(el, -up); const back = b0 - el.scrollTop; await A.sleep(hydrated ? 500 + Math.random() * 250 : 900 + Math.random() * 400);
+        if (back > 0) step(el, back); await A.sleep(hydrated ? 350 + Math.random() * 200 : 700 + Math.random() * 300);
       }
       let moved = step(el, dy);
-      if (slow) await A.sleep(1100 + Math.random() * 500);
-      if (!moved && !container) {
-        const alt = findScroller();
-        if (alt && alt !== el) { scroller = alt; moved = step(alt, dy); }
-        else if (el !== de()) { scroller = null; moved = step(de(), dy); }
+      if (slow) {
+        if (hydrated) {
+          await A.sleep(300);
+          const t1 = Date.now(), cap = Math.min(4500, 2600 * k);
+          while (!ctx.stopped() && Date.now() - t1 < cap) { let ok = false; try { ok = hydrated(); } catch (_) {} if (ok) break; await A.sleep(150); }
+        } else await A.sleep(1100 + Math.random() * 500);
       }
       try { if (nudge) nudge(); } catch (_) {}
       if (logged < 3 || (idle === 3)) { logged++; A.log('info', `scroll: hidden=${document.hidden} moved=${moved} scroller=${(scroller || de()).tagName.toLowerCase()} top=${Math.round((scroller || de()).scrollTop)}/${(scroller || de()).scrollHeight}`); }
@@ -143,7 +146,8 @@
   };
 
   /** Aurora Audit: read the profile and the latest posts with the platform's own tasks, then score them locally. */
-  A.runAudit = async function (ctx, { platform, profile, posts, nPosts, media, ready, slow }) {
+  A.runAudit = async function (ctx, { platform, profile, posts, nPosts: nDefault, media, ready, slow }) {
+    const nPosts = Math.max(5, Math.min(60, Number(ctx.limit) || nDefault)); // Quick 10 · Standard 20 · Deep 30, chosen on the Health check page
     const grab = (limit, mediaOn, slowOn) => {
       const rows = [], p = Object.create(ctx);
       p.limit = limit; p.opts = Object.assign({}, ctx.opts, { limit, media: mediaOn, slow: !!slowOn });

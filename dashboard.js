@@ -10,7 +10,7 @@
   };
   const send = (m) => new Promise((res) => chrome.runtime.sendMessage(m, (r) => res(r || {})));
 
-  const S = { view: 'extract', platform: 'facebook', tabs: [], tabId: null, desc: null, kind: null, opts: { limit: 200, speed: 'normal', media: true }, runs: [], active: null, rows: [], page: 1, q: '', stripHidden: false };
+  const S = { view: 'extract', platform: 'facebook', tabs: [], tabId: null, desc: null, kind: null, opts: { limit: 200, speed: 'normal', media: true, audit: 20 }, runs: [], active: null, rows: [], page: 1, q: '', stripHidden: false };
   const SPEED = { gentle: 2200, normal: 1200, fast: 600 };
 
   /* ---------- utilities ---------- */
@@ -165,17 +165,21 @@
     run.innerHTML = ok ? `
       <div class="card lrun"><div class="ring2"><b>?</b></div>
         <div style="flex:1;min-width:240px"><h3 style="margin:0 0 2px">${h(p.name)} · ${h(S.desc.page.label)}</h3><p style="margin:0;color:var(--muted)">Keep this tab in front while the check runs (about a minute).</p>
-          <div class="seg" id="aSpeed" style="margin-top:12px;max-width:300px">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div></div>
+          <div class="auditopts">
+            <div><label>Posts to read</label><div class="seg" id="aCount">${[[10, 'Quick'], [20, 'Standard'], [30, 'Deep']].map(([n, l]) => `<button data-n="${n}" class="${S.opts.audit === n ? 'on' : ''}">${l} <small>${n}</small></button>`).join('')}</div></div>
+            <div><label>Pace</label><div class="seg" id="aSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div></div></div>
+          <p class="sub" style="margin:10px 0 0">${S.opts.audit <= 10 ? 'Quick: usually under a minute.' : S.opts.audit >= 30 ? 'Deep: the most reliable score — Facebook can take several minutes.' : 'Standard: a good balance. Facebook may take a couple of minutes.'}</p></div>
         <button class="btn primary big" id="auditGo">✦ Run health check</button></div>`
       : `<div class="warn">${S.desc ? 'This page can\'t be scored. Open a <b>profile or page</b> (not a post, group or search) on ' + h(p.name) + ', then press “Refresh tabs”.' : 'This tab hasn\'t loaded the extension yet — reload the page once, then press “Refresh tabs”.'}</div>`;
     if (ok) {
       $('#aSpeed').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { S.opts.speed = b.dataset.s; renderAuditView(); } };
+      $('#aCount').onclick = (e) => { const b = e.target.closest('[data-n]'); if (b) { S.opts.audit = +b.dataset.n; renderAuditView(); } };
       $('#auditGo').onclick = startAudit;
     }
   }
   async function startAudit() {
     $('#auditGo').disabled = true;
-    const res = await send({ type: 'startRun', tabId: S.tabId, kind: 'audit', platform: S.platform, label: `${C.platforms[S.platform].name} · Health check (Aurora Audit)`, opts: { limit: 30, delayMs: SPEED[S.opts.speed], media: true } });
+    const res = await send({ type: 'startRun', tabId: S.tabId, kind: 'audit', platform: S.platform, label: `${C.platforms[S.platform].name} · Health check (Aurora Audit)`, opts: { limit: S.opts.audit, delayMs: SPEED[S.opts.speed], media: true } });
     if (!res.ok) { toast(res.error || 'Could not start'); $('#auditGo').disabled = false; }
     else toast('Health check started — keep that tab in front');
     await loadRuns(); renderLive();

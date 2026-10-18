@@ -31,7 +31,7 @@ const stub = ([runs, rowsets, tabs, desc]) => {
   window.chrome = {
     storage: { local: { get: async (k) => { const o = {}; [].concat(k || []).forEach((x) => { if (x in store) o[x] = store[x]; }); return o; }, set: async (o) => Object.assign(store, o), remove: async () => {} }, onChanged: { addListener() {} } },
     tabs: { query: async (q) => tabs.filter((t) => q.url && q.url.some((m) => t.url.includes(m.split('*.')[1].split('/')[0]))), sendMessage: async () => desc, create: async () => {}, reload() {}, onUpdated: { addListener() {} } },
-    runtime: { getManifest: () => ({ name: 'Aurora Extract', version: '0.3.4' }), sendMessage: (m, cb) => (cb || (() => {}))({ ok: true }), getURL: (x) => x },
+    runtime: { getManifest: () => ({ name: 'Aurora Extract', version: '0.3.5' }), sendMessage: (m, cb) => (cb || (() => {}))({ ok: true }), getURL: (x) => x },
   };
 };
 const DESC = { platform: 'instagram', name: 'Instagram', page: { label: '@sunrisebakery_demo', primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & business contact' }, { id: 'posts', label: 'Posts & reels' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }] } };
