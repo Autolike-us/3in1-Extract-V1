@@ -5,11 +5,11 @@
   if (window.__auroraFbSniff) return;
   window.__auroraFbSniff = true;
   const store = {};
-  const RANK = { browser_native_hd_url: 4, playable_url_quality_hd: 3, browser_native_sd_url: 2, playable_url: 1 };
-  const RE = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url)":"((?:[^"\\]|\\.)+)"/g;
+  const RANK = { hd_src_no_ratelimit: 6, hd_src: 5, browser_native_hd_url: 5, playable_url_quality_hd: 4, sd_src_no_ratelimit: 3, browser_native_sd_url: 3, sd_src: 2, progressive_url: 2, playable_url: 1 };
+  const RE = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url|hd_src_no_ratelimit|hd_src|sd_src_no_ratelimit|sd_src|progressive_url)":"((?:[^"\\]|\\.)+)"/g;
   const unesc = (u) => { try { return JSON.parse('"' + u + '"'); } catch (_) { return u.replace(/\\\//g, '/').replace(/\\u0026/g, '&'); } };
   function handle(text) {
-    if (!text || text.indexOf('playable_url') < 0 && text.indexOf('browser_native') < 0) return;
+    if (!text || text.indexOf('playable_url') < 0 && text.indexOf('browser_native') < 0 && text.indexOf('_src') < 0 && text.indexOf('progressive_url') < 0) return;
     const best = {};
     RE.lastIndex = 0; let m;
     while ((m = RE.exec(text))) {

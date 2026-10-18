@@ -164,7 +164,7 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const dets = await pg.evaluate(() => { const d = (u) => AuroraX.platforms.facebook.detect(new URL(u)); return { feed: d('https://www.facebook.com/groups/9/'), prof: d('https://www.facebook.com/acme.cafe'), pid: d('https://www.facebook.com/profile.php?id=55'), fr: d('https://www.facebook.com/acme.cafe/friends'), post: d('https://www.facebook.com/acme/posts/123'), mem: d('https://www.facebook.com/groups/9/members') }; });
   const ids = (d) => d.kinds.map((k) => k.id).join();
   check('FB group feed offers Group members (↗ opens the Members tab) + Group info + posts', ids(dets.feed) === 'posts,group_members,group_info,comments' && dets.feed.kinds[1].goto === 'https://www.facebook.com/groups/9/members');
-  check('FB profile offers friends / followers / following lists with goto links', ids(dets.prof) === 'page_info,posts,people_friends,people_followers,people_following' && dets.prof.kinds[3].goto === 'https://www.facebook.com/acme.cafe/followers');
+  check('FB profile offers friends / followers / following lists with goto links', ids(dets.prof) === 'page_info,posts,people_friends,people_followers,people_following,audit' && dets.prof.kinds[3].goto === 'https://www.facebook.com/acme.cafe/followers');
   check('FB profile.php?id= builds sk= links', dets.pid.kinds.find((k) => k.id === 'people_friends').goto === 'https://www.facebook.com/profile.php?id=55&sk=friends');
   check('FB friends page → people list; post page → comments, commenters, reactors', dets.fr.primary === 'people' && ids(dets.post) === 'comments,commenters,reactors,posts' && dets.mem.primary === 'group_members');
 
@@ -269,7 +269,42 @@ function mkCtx(limit = 100) { return `(()=>{const rows=[];const ctx={opts:{},lim
   const diag = await pg.evaluate(async () => { document.dispatchEvent(new CustomEvent('x')); const logs = []; window.fetch = async () => ({ ok: true, text: async () => '<html><body>verify you are human captcha</body></html>' }); const rows = []; const ctx = { opts: { media: true }, limit: 5, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m) => logs.push(m), setWarning(w) { logs.push('WARN ' + w); }, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
     document.body.innerHTML = '<div data-e2e="user-post-item-list"><div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/999"><img alt="z" src="https://x/z.jpg"></a></div></div>';
     await AuroraX.platforms.tiktok.tasks.videos(ctx); return { logs, rows }; });
-  check('TikTok videos: when no file is available it says why (page size, scopes, verification) and flags the row', /video data not found \(html \d+b/.test(diag.logs.join(' ')) && /verification page/.test(diag.logs.join(' ')) && diag.rows[0].videoMissing === true && diag.logs.some((l) => /^WARN .*cover picture only/.test(l)));
+  check('TikTok videos: when no file is available it says why (page size, scopes, verification) and flags the row', /video data not found — page has no video data \(html \d+b/.test(diag.logs.join(' ')) && /api not JSON|api returned no video/.test(diag.logs.join(' ')) && /verification page/.test(diag.logs.join(' ')) && diag.rows[0].videoMissing === true && diag.logs.some((l) => /^WARN .*cover picture only/.test(l)));
+
+  // ---- TikTok API fallback when the video page has no data
+  await load('https://www.tiktok.com/@chef', `<div data-e2e="user-post-item-list"><div data-e2e="user-post-item"><a href="https://www.tiktok.com/@chef/video/555"><img alt="z" src="https://x/z.jpg"></a></div></div>`, ...F, 'content/tiktok.js');
+  const viaApi = await pg.evaluate(async () => {
+    AuroraX.sleep = () => Promise.resolve();
+    window.fetch = async (u) => /api\/item\/detail/.test(u)
+      ? { ok: true, text: async () => JSON.stringify({ statusCode: 0, itemInfo: { itemStruct: { id: '555', desc: 'via api', author: { uniqueId: 'chef' }, stats: { playCount: 7 }, video: { cover: 'https://c/5.jpg', playAddr: 'https://v16.tiktokcdn.com/555.mp4' } } } }) }
+      : { ok: true, text: async () => '<html>no data</html>' };
+    const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 5, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m) => logs.push(m), setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.tiktok.tasks.videos(ctx); return rows;
+  });
+  check('TikTok videos: falls back to the item-detail API when the page has no data', viaApi[0].media[0].type === 'video' && /555\.mp4/.test(viaApi[0].media[0].url) && viaApi[0].plays === 7 && !viaApi[0].videoMissing);
+
+  // ---- Facebook: a video post whose id is not in the card → the post page is opened and the file read from it
+  await load('https://www.facebook.com/WhiteHouse', `<div role="main"><div role="article"><h3><a href="https://www.facebook.com/WhiteHouse">WH</a></h3><a href="https://www.facebook.com/WhiteHouse/posts/pfbid0abc123"><span>2h</span></a><div dir="auto">watch this</div><video></video></div></div>`, ...F, 'content/facebook.js');
+  const fbv = await pg.evaluate(async () => {
+    AuroraX.sleep = () => Promise.resolve();
+    const page = '<html>{"video":{"id":"90001112223","browser_native_sd_url":"https:\\/\\/v.fbcdn.net\\/sd.mp4?a=1\\u0026b=2","browser_native_hd_url":"https:\\/\\/v.fbcdn.net\\/hd.mp4?a=1\\u0026b=2"}}</html>';
+    window.fetch = async (u) => ({ ok: true, text: async () => (/pfbid0abc123/.test(u) ? page : '<html></html>') });
+    const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 3, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m, d) => logs.push(m + (d ? ' ' + d : '')), setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.facebook.tasks.posts(ctx); return { rows, logs };
+  });
+  check('FB video post: opens the post page and saves the real video file (HD)', fbv.rows.length === 1 && fbv.rows[0].media[0].type === 'video' && fbv.rows[0].media[0].url === 'https://v.fbcdn.net/hd.mp4?a=1&b=2' && !fbv.rows[0].videoMissing && fbv.logs.some((l) => /video file found via post page/.test(l)) && fbv.logs.some((l) => /^video post \{/.test(l)));
+
+  // ---- Facebook: post page has nothing, the embed player page has the file (hd_src)
+  await load('https://www.facebook.com/WhiteHouse', `<div role="main"><div role="article"><h3><a href="https://www.facebook.com/WhiteHouse">WH</a></h3><a href="https://www.facebook.com/WhiteHouse/posts/pfbid0zzz"><span>3h</span></a><div dir="auto">clip</div><video></video></div></div>`, ...F, 'content/facebook.js');
+  const emb = await pg.evaluate(async () => {
+    AuroraX.sleep = () => Promise.resolve();
+    window.fetch = async (u) => ({ ok: true, text: async () => (/plugins\/video\.php/.test(u) ? '<html>{"video_id":"123456789012","hd_src":"https:\\/\\/v.fbcdn.net\\/e.mp4?x=1\\u0026y=2","sd_src":"https:\\/\\/v.fbcdn.net\\/e-sd.mp4"}</html>' : '<html>nothing</html>') });
+    const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 3, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m, d) => logs.push(m + (d ? ' ' + d : '')), setWarning() {}, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } };
+    await AuroraX.platforms.facebook.tasks.posts(ctx); return { rows, logs };
+  });
+  check('FB video post: falls back to the embed player page (hd_src) and logs each step it tried', emb.rows[0].media[0].url === 'https://v.fbcdn.net/e.mp4?x=1&y=2' && emb.logs.some((l) => /video file found via embed player.*post page: \d+b, 0 file/.test(l)));
+  const none = await pg.evaluate(async () => { window.fetch = async () => ({ ok: true, text: async () => '<html>no video here</html>' }); const rows = [], logs = []; const ctx = { opts: { media: true }, limit: 3, stopped: () => false, count: () => rows.length, pause: () => Promise.resolve(), log: (l, m, d) => logs.push(m + (d ? ' ' + d : '')), setWarning(w) { logs.push('WARN ' + w); }, progress() {}, emit(r) { for (const x of [].concat(r)) rows.push(x); return 1; } }; document.querySelectorAll('[role=article]').forEach((a) => a.setAttribute('data-x', '1')); await AuroraX.platforms.facebook.tasks.posts(ctx); return { rows, logs }; });
+  check('FB video post with no file anywhere is flagged videoMissing with a warning and a full trail', none.rows[0].videoMissing === true && none.logs.some((l) => /no video file found post page: \d+b, 0 file\(s\) \| embed player: \d+b, 0 file/.test(l)) && none.logs.some((l) => /^WARN 1 video post/.test(l)));
 
   // ---- instagram: API failure → page-reading fallback, reels resolve to real video files
   await load('https://www.instagram.com/shop/', `<a href="/p/AAA/"><img alt="Photo by shop" src="https://x/thumb1.jpg"></a><a href="/reel/BBB/"><img alt="Reel" src="https://x/thumb2.jpg"></a>`, ...F, 'content/instagram.js');
