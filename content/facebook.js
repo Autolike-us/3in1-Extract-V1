@@ -7,17 +7,17 @@
 
   /* Video file addresses: captured from Facebook's own page data (fb-sniffer.js) and scanned from inline page JSON. */
   const VIDEOS = {};
-  const RANK = { browser_native_hd_url: 4, playable_url_quality_hd: 3, browser_native_sd_url: 2, playable_url: 1 };
+  const RANK = { hd_src_no_ratelimit: 6, hd_src: 5, browser_native_hd_url: 5, playable_url_quality_hd: 4, sd_src_no_ratelimit: 3, browser_native_sd_url: 3, sd_src: 2, progressive_url: 2, playable_url: 1 };
   const addVideo = (id, url, q) => { if (id && url && (!VIDEOS[id] || VIDEOS[id].q < q)) VIDEOS[id] = { url, q }; };
   document.addEventListener('aurora-fb-media', (e) => { try { for (const v of JSON.parse(e.detail)) addVideo(v.id, v.url, v.q); } catch (_) {} });
   document.dispatchEvent(new CustomEvent('aurora-fb-replay'));
   const scanned = new WeakSet();
   function scanScripts() {
-    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url)":"((?:[^"\\]|\\.)+)"/g;
+    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url|hd_src_no_ratelimit|hd_src|sd_src_no_ratelimit|sd_src|progressive_url)":"((?:[^"\\]|\\.)+)"/g;
     for (const sc of document.scripts) {
       if (scanned.has(sc)) continue; scanned.add(sc);
       const t = sc.textContent || '';
-      if (t.indexOf('playable_url') < 0 && t.indexOf('browser_native') < 0) continue;
+      if (t.indexOf('playable_url') < 0 && t.indexOf('browser_native') < 0 && t.indexOf('_src') < 0 && t.indexOf('progressive_url') < 0) continue;
       let m; re.lastIndex = 0;
       while ((m = re.exec(t))) {
         const ids = Array.from(t.slice(Math.max(0, m.index - 900), m.index).matchAll(/"(?:id|video_id)":"(\d{6,})"/g));
@@ -26,6 +26,45 @@
         addVideo(ids[ids.length - 1][1], url, RANK[m[1]]);
       }
     }
+  }
+  /** Video file address(es) inside a page's HTML/JSON: [{id,url,q}] in order of appearance, best quality per video id. */
+  function videosInText(text) {
+    const re = /"(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url|hd_src_no_ratelimit|hd_src|sd_src_no_ratelimit|sd_src|progressive_url)":"((?:[^"\\]|\\.)+)"/g;
+    const best = new Map(); let m;
+    while ((m = re.exec(text))) {
+      const ids = Array.from(text.slice(Math.max(0, m.index - 900), m.index).matchAll(/"(?:id|video_id)":"(\d{6,})"/g));
+      const id = ids.length ? ids[ids.length - 1][1] : '?';
+      let url; try { url = JSON.parse('"' + m[2] + '"'); } catch (_) { url = m[2].replace(/\\\//g, '/'); }
+      const q = RANK[m[1]];
+      if (!best.has(id) || best.get(id).q < q) best.set(id, { id, url, q });
+    }
+    return Array.from(best.values());
+  }
+  /** Find a post's video file by trying, in order: the post page, Facebook's embed player page, the watch page. Returns the
+   *  first video file found plus a trail of what each step saw (for the debug log). */
+  async function videoFromPermalink(row, log) {
+    const want = row.videoIds || [];
+    const origin = location.origin;
+    const steps = [{ label: 'post page', url: row.url }];
+    steps.push({ label: 'embed player', url: `${origin}/plugins/video.php?href=${encodeURIComponent(row.url.split('?')[0])}&show_text=false&width=560` });
+    for (const id of want.slice(0, 1)) {
+      steps.push({ label: 'watch page', url: `${origin}/watch/?v=${id}` });
+      steps.push({ label: 'embed by video id', url: `${origin}/plugins/video.php?href=${encodeURIComponent(`${origin}/reel/${id}/`)}&show_text=false&width=560` });
+    }
+    const trail = [];
+    for (const st of steps) {
+      try {
+        const r = await fetch(st.url, { credentials: 'include' });
+        if (!r.ok) { trail.push(`${st.label}: HTTP ${r.status}`); continue; }
+        const html = await r.text();
+        const list = videosInText(html);
+        for (const v of list) if (v.id !== '?') addVideo(v.id, v.url, v.q);
+        trail.push(`${st.label}: ${html.length}b, ${list.length} file(s)${/login|checkpoint/i.test(html.slice(0, 3000)) && !list.length ? ', login/checkpoint page?' : ''}`);
+        const hit = list.find((v) => want.includes(v.id)) || list[0];
+        if (hit) return { url: hit.url, via: st.label, trail };
+      } catch (e) { trail.push(`${st.label}: ${e.message}`); }
+    }
+    return { url: null, trail };
   }
   const videoIdsIn = (card) => {
     const ids = new Set();
@@ -60,7 +99,7 @@
       const go = (t) => (isId ? `${FB}/profile.php?id=${u.searchParams.get('id')}&sk=${t}` : `${FB}/${handle}/${t}`);
       if (/^(friends|friends_all|friends_mutual|followers|following)$/i.test(tab)) return { label: `People · ${tab.replace('_all', '')}`, primary: 'people', kinds: [K('people', `List of ${tab.replace('_all', '')} (names + profile links)`), K('page_info', 'Profile / page details', isId ? `${FB}/profile.php?id=${u.searchParams.get('id')}` : `${FB}/${handle}`)] };
       if (/about/.test(tab)) return { label: 'Profile / page — About', primary: 'page_info', kinds: [K('page_info', 'Contact & About details')] };
-      return { label: 'Profile / page', primary: 'page_info', kinds: [K('page_info', 'Profile & contact details'), K('posts', 'Posts'), K('people_friends', 'Friends list', go('friends')), K('people_followers', 'Followers list', go('followers')), K('people_following', 'Following list', go('following'))] };
+      return { label: 'Profile / page', primary: 'page_info', kinds: [K('page_info', 'Profile & contact details'), K('posts', 'Posts'), K('people_friends', 'Friends list', go('friends')), K('people_followers', 'Followers list', go('followers')), K('people_following', 'Following list', go('following')), K('audit', '✦ Health check (Aurora Audit)')] };
     }
     return { label: 'Facebook', primary: null, kinds: [] };
   }
@@ -79,6 +118,14 @@
     const times = A.qa('a[href] , a[aria-label], a[role="link"] span', art).filter((e) => e.tagName !== 'A' || POST_HREF.test(e.getAttribute('href') || '') || e.hasAttribute('aria-label')).map((e) => e.getAttribute('aria-label') || A.txt(e)).filter((t) => /^(\d+\s?[smhdwy]|just now|yesterday|\w+ \d{1,2}(, \d{4})?|\d+ (sec|min|hour|day|week|month|year))/i.test(t));
     const reactions = A.q('[aria-label*="reaction" i], [aria-label*="like" i]', art);
     const text2 = A.txt(art);
+    /* newer layouts show the count as its own line ("All reactions:" / "1.2K") just before "34 comments" */
+    const lines = (art.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const reactLine = (() => {
+      const k = lines.findIndex((l) => /^all reactions:?$/i.test(l)); if (k >= 0 && /^[\d.,]+\s?[KkMm]?$/.test(lines[k + 1] || '')) return lines[k + 1];
+      const ci = lines.findIndex((l) => /^[\d.,]+\s?[KkMm]?\s+comments?$/i.test(l));
+      for (let i = ci - 1; ci > 0 && i >= Math.max(0, ci - 3); i--) if (/^[\d.,]+\s?[KkMm]?$/.test(lines[i])) return lines[i];
+      return '';
+    })();
     const numAfter = (re) => { const m = text2.match(re); return m ? A.parseCount(m[1]) : null; };
     const media = A.dedupeMedia([
       ...A.mediaFromImgs(art, 200),
@@ -89,11 +136,12 @@
     let videoMissing = false;
     for (const id of vids) { if (VIDEOS[id]) media.unshift({ type: 'video', url: VIDEOS[id].url }); else videoMissing = true; }
     if (hasVideoEl && !vids.length) videoMissing = true;
+    const diag = hasVideoEl || vids.length ? { hasVideoEl, ids: vids.length, known: vids.filter((i) => VIDEOS[i]).length, links: A.qa('a[href]', art).map((a) => a.getAttribute('href') || '').filter((h) => /video|reel|watch/i.test(h)).slice(0, 3).map((h) => h.replace(/\d{6,}/g, '<id>').replace(/pfbid\w+/g, 'pfbid').slice(0, 60)) } : null;
     return {
-      id: url || undefined, url, ...(vids.length ? { videoIds: vids } : {}), ...(videoMissing ? { videoMissing: true } : {}),
+      _diag: diag, id: url || undefined, url, ...(vids.length ? { videoIds: vids } : {}), ...(videoMissing ? { videoMissing: true } : {}),
       author: A.txt(authorEl), authorUrl: authorEl ? A.abs(authorEl.href.split('?')[0]) : '',
       text, postedAt: times[0] || '',
-      reactions: reactions ? A.parseCount(reactions.getAttribute('aria-label')) || A.parseCount(A.txt(reactions)) : null,
+      reactions: reactions ? A.parseCount(reactions.getAttribute('aria-label')) || A.parseCount(A.txt(reactions)) || (reactLine ? A.parseCount(reactLine) : null) : (reactLine ? A.parseCount(reactLine) : null),
       comments: numAfter(/([\d.,KkMm]+)\s+comments?/i), shares: numAfter(/([\d.,KkMm]+)\s+shares?/i),
       emailsInText: c.emails, phonesInText: c.phones, media,
     };
@@ -122,14 +170,23 @@
   }
 
   async function posts(ctx) {
-    const seen = new Set();
-    let pull = 0, missing = 0;
+    const seen = new Set(), retry = {};
+    let pull = 0, missing = 0, fails = 0;
     const log = (...a) => ctx.log && ctx.log(...a);
+    const wantMedia = ctx.opts.media !== false;
+    const slow = !!ctx.opts.slow;
+    /** Every post currently on screen has drawn its content (not an empty placeholder). */
+    const visibleReady = () => {
+      const vis = articleList().filter((a) => { const r = a.getBoundingClientRect(); return r.bottom > 80 && r.top < innerHeight - 80; });
+      return vis.length > 0 && vis.every((a) => (a.innerText || '').trim().length > 60);
+    };
     const lastArticle = () => { const l = articleList(); return l[l.length - 1]; };
     scanScripts();
+    log('info', `video addresses known at start: ${Object.keys(VIDEOS).length}`);
     await A.scrollCollect(ctx, () => {
       scanScripts();
-      let added = 0, empty = 0, dup = 0;
+      let empty = 0, dup = 0, late = 0;
+      const fresh = [];
       const arts = articleList();
       const cards = arts.length < 3 ? permalinkCards() : [];
       for (const art of arts.concat(cards)) {
@@ -137,14 +194,33 @@
         const key = row.url || (row.author + row.text.slice(0, 60));
         if (!row.url && !row.text && !row.media.length) { empty++; continue; }
         if (seen.has(key)) { dup++; continue; }
+        // slow mode: a post that has not drawn its numbers yet gets two more looks before we accept it as it is
+        if (slow && row.reactions == null && row.comments == null && (retry[key] = (retry[key] || 0) + 1) <= 2) { late++; continue; }
         seen.add(key);
+        fresh.push(row);
+      }
+      pull++;
+      if (pull <= 3 || pull % 5 === 0 || !fresh.length) log('info', `pull ${pull}: hidden=${document.hidden} articles=${arts.length} permalinkCards=${cards.length} new=${fresh.length} empty=${empty} dup=${dup}${slow ? ' late=' + late : ''}`);
+      return fresh;
+    }, { async: true, process: async (fresh) => {
+      let added = 0;
+      for (const row of fresh) {
+        if (ctx.stopped() || ctx.count() >= ctx.limit) break;
+        if (row._diag) log('info', 'video post', JSON.stringify(row._diag));
+        if (wantMedia && row.videoMissing && row.url && fails < 3) {
+          try {
+            const v = await videoFromPermalink(row, log);
+            if (v.url) { row.media.unshift({ type: 'video', url: v.url }); delete row.videoMissing; log('info', 'video file found via ' + v.via, v.trail.join(' | ')); fails = 0; }
+            else log('warn', 'no video file found', v.trail.join(' | '));
+          } catch (e) { fails++; log('warn', 'could not open post page: ' + e.message, fails >= 3 ? 'giving up on page lookups for this run' : ''); }
+          await ctx.pause();
+        }
+        delete row._diag;
         if (row.videoMissing) missing++;
         added += ctx.emit(row);
       }
-      pull++;
-      if (pull <= 3 || pull % 5 === 0 || added === 0) log('info', `pull ${pull}: hidden=${document.hidden} articles=${arts.length} permalinkCards=${cards.length} new=${added} empty=${empty} dup=${dup}`);
       ctx.progress(); return added;
-    }, { patience: 8, nudge: () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
+    }, patience: slow ? 6 : 8, slow, hydrated: slow ? visibleReady : undefined, nudge: slow ? null : () => { const l = lastArticle(); if (l) l.scrollIntoView({ block: 'end' }); } });
     if (ctx.setWarning && missing) ctx.setWarning(`${missing} video post${missing > 1 ? 's' : ''} saved without the video file — Facebook didn't expose it. Reload the page, scroll down once so the videos load, then run again.`);
   }
 
@@ -324,10 +400,12 @@
     ctx.emit({ id: location.pathname.split('/')[2], name, url: location.href.split('?')[0], members: A.parseCount(members), privacy, activity: posts, about: (A.meta('og:description') || '').slice(0, 600), media: A.meta('og:image') ? [{ type: 'image', url: A.meta('og:image') }] : [] });
   }
 
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'facebook', profile: pageInfo, posts, nPosts: 20, media: false, slow: true, ready: () => { const m = A.q('[role="main"]') || document.body, t = m.innerText || ''; return !!A.q('h1') && t.length > 250 && /follower|like|people follow this|About|Posts/i.test(t); } }); }
+
   A.register('facebook', {
     name: 'Facebook', hosts: /(^|\.)facebook\.com$/, detect,
-    kinds: ['page_info', 'posts', 'comments', 'commenters', 'reactors', 'people', 'people_friends', 'people_followers', 'people_following', 'group_info', 'group_members', 'marketplace_list', 'marketplace_item'],
-    tasks: { page_info: pageInfo, posts, comments, commenters, reactors, people, people_friends: people, people_followers: people, people_following: people, group_info: groupInfo, group_members: groupMembers, marketplace_list: marketplaceList, marketplace_item: marketplaceItem, marketplace_seller: pageInfo },
+    kinds: ['page_info', 'posts', 'comments', 'commenters', 'reactors', 'people', 'people_friends', 'people_followers', 'people_following', 'group_info', 'group_members', 'marketplace_list', 'marketplace_item', 'audit'],
+    tasks: { audit, page_info: pageInfo, posts, comments, commenters, reactors, people, people_friends: people, people_followers: people, people_following: people, group_info: groupInfo, group_members: groupMembers, marketplace_list: marketplaceList, marketplace_item: marketplaceItem, marketplace_seller: pageInfo },
     _test: { parsePost, parseListingCard, detect },
   });
 })();

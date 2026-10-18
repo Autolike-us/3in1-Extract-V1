@@ -1,33 +1,43 @@
 /* Aurora Extract — service worker: run bookkeeping + local storage. Nothing is ever sent to a server. */
 'use strict';
 
-const FLUSH_MS = 700;
+const FLUSH_MS = 500;
 const buffers = new Map(); // runId -> rows[] not yet persisted
+const logBuf = [];         // log entries not yet persisted
 let flushTimer = null;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const get = async (k, d) => { const o = await chrome.storage.local.get(k); return o[k] === undefined ? d : o[k]; };
 
-async function logBg(level, m, d) { const dl = await get('debugLog', []); dl.push({ t: Date.now(), l: level, m, d: d || '' }); await chrome.storage.local.set({ debugLog: dl.slice(-800) }); }
+/** Every storage change is a read-modify-write, so they must never overlap (concurrent messages used to overwrite each other
+ *  and silently dropped log lines and rows). All writers go through this single queue. Never call lock() from inside lock(). */
+let chain = Promise.resolve();
+const lock = (fn) => { const r = chain.then(fn); chain = r.catch(() => {}); return r; };
 
-async function updateRun(runId, patch) {
+const logBg = (level, m, d) => { logBuf.push({ t: Date.now(), l: level, m, d: d || '' }); scheduleFlush(); };
+
+const updateRun = (runId, patch) => lock(async () => {
   const runs = await get('runs', []);
   const r = runs.find((x) => x.id === runId);
   if (!r) return null;
   Object.assign(r, patch);
   await chrome.storage.local.set({ runs });
   return r;
-}
+});
 
-async function flush() {
+/** Persist buffered rows + log lines (one queued job; safe to call any time). */
+const flush = () => lock(async () => {
   flushTimer = null;
+  const out = {};
+  if (logBuf.length) { const dl = await get('debugLog', []); out.debugLog = dl.concat(logBuf.splice(0)).slice(-800); }
   for (const [runId, rows] of Array.from(buffers)) {
     buffers.delete(runId);
     const key = 'rows:' + runId;
-    const cur = await get(key, []);
-    await chrome.storage.local.set({ [key]: cur.concat(rows) });
+    const cur = key in out ? out[key] : await get(key, []);
+    out[key] = cur.concat(rows);
   }
-}
+  if (Object.keys(out).length) await chrome.storage.local.set(out);
+});
 const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS); };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -46,9 +56,7 @@ async function navigate(tabId, url) {
 
 async function startRun({ tabId, kind, opts, label, platform, goto }) {
   const run = { id: uid(), platform, kind, label: label || kind, opts, tabId, status: 'running', count: 0, note: '', startedAt: Date.now(), finishedAt: null, error: null };
-  const runs = await get('runs', []);
-  runs.unshift(run);
-  await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] });
+  await lock(async () => { const runs = await get('runs', []); runs.unshift(run); await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] }); });
   let res;
   if (goto) { await logBg('info', 'navigating tab to start ' + kind, goto.replace(/\d{6,}/g, '<id>')); await updateRun(run.id, { note: 'Opening the right page…' }); try { await navigate(tabId, goto); } catch (e) { await logBg('error', 'navigation failed', String(e)); } }
   try { for (let i = 0; ; i++) { try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); break; } catch (e) { if (i >= 8) throw e; await sleep(1000); } } }
@@ -58,17 +66,18 @@ async function startRun({ tabId, kind, opts, label, platform, goto }) {
   return { ok: true, runId: run.id };
 }
 
-async function deleteRun(runId) {
+const deleteRun = (runId) => lock(async () => {
+  buffers.delete(runId);
   const runs = (await get('runs', [])).filter((r) => r.id !== runId);
   await chrome.storage.local.set({ runs });
   await chrome.storage.local.remove('rows:' + runId);
-}
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, send) => {
   (async () => {
     switch (msg && msg.type) {
       case 'rows': { const b = buffers.get(msg.runId) || []; b.push(...msg.rows); buffers.set(msg.runId, b); scheduleFlush(); return send({}); }
-      case 'log': { const dl = await get('debugLog', []); dl.push({ ...msg.entry, r: msg.runId }); await chrome.storage.local.set({ debugLog: dl.slice(-800) }); return send({}); }
+      case 'log': { logBuf.push({ ...msg.entry, r: msg.runId }); scheduleFlush(); return send({}); }
       case 'progress': await updateRun(msg.runId, { count: msg.count, note: msg.note || '' }); return send({});
       case 'done': {
         await flush();
@@ -93,17 +102,21 @@ async function openDashboard(hash = '') {
   else await chrome.tabs.create({ url: url + hash });
 }
 
-/* CDN hosts check Referer on media; give the extension pages a matching one so downloads work. */
+/* CDN hosts check Referer (and sometimes Origin) on media. Give requests made by the extension's own pages the headers a normal page on
+   that site would send, so photo / video downloads work. These rules never touch normal browsing (extension-initiated requests only). */
+const MEDIA_HOSTS = [
+  ['tiktok.com', 'https://www.tiktok.com/'], ['tiktokcdn.com', 'https://www.tiktok.com/'], ['tiktokcdn-us.com', 'https://www.tiktok.com/'], ['tiktokcdn-eu.com', 'https://www.tiktok.com/'],
+  ['tiktokv.com', 'https://www.tiktok.com/'], ['tiktokv.us', 'https://www.tiktok.com/'], ['byteoversea.com', 'https://www.tiktok.com/'], ['ibytedtos.com', 'https://www.tiktok.com/'], ['muscdn.com', 'https://www.tiktok.com/'],
+  ['cdninstagram.com', 'https://www.instagram.com/'], ['instagram.com', 'https://www.instagram.com/'],
+  ['fbcdn.net', 'https://www.facebook.com/'],
+];
 async function installRules() {
-  const mk = (id, domain, referer) => ({ id, priority: 1, action: { type: 'modifyHeaders', requestHeaders: [{ header: 'referer', operation: 'set', value: referer }] },
+  const mk = ([domain, referer], i) => ({ id: i + 1, priority: 1,
+    action: { type: 'modifyHeaders', requestHeaders: [{ header: 'referer', operation: 'set', value: referer }, { header: 'origin', operation: 'remove' }] },
     condition: { requestDomains: [domain], resourceTypes: ['xmlhttprequest', 'media', 'image', 'other'], initiatorDomains: [chrome.runtime.id] } });
   try {
-    await chrome.declarativeNetRequest.updateSessionRules({
-      removeRuleIds: [1, 2, 3, 4, 5],
-      addRules: [mk(1, 'tiktokcdn.com', 'https://www.tiktok.com/'), mk(2, 'tiktokcdn-us.com', 'https://www.tiktok.com/'), mk(3, 'tiktokv.com', 'https://www.tiktok.com/'),
-        mk(4, 'cdninstagram.com', 'https://www.instagram.com/'), mk(5, 'fbcdn.net', 'https://www.facebook.com/')],
-    });
-  } catch (_) {}
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: Array.from({ length: 40 }, (_, i) => i + 1), addRules: MEDIA_HOSTS.map(mk) });
+  } catch (e) { logBg('error', 'could not install download header rules', String(e)); }
 }
 chrome.runtime.onInstalled.addListener((d) => { installRules(); if (d.reason === 'install') openDashboard('#welcome'); });
 chrome.runtime.onStartup.addListener(installRules);

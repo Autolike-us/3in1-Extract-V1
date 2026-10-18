@@ -72,10 +72,10 @@
     kindLabels: {
       page_info: 'Page / profile details', posts: 'Posts', comments: 'Comments', group_members: 'Group members', marketplace_list: 'Marketplace listings',
       marketplace_item: 'Marketplace listing', marketplace_seller: 'Seller details', profile: 'Profile', followers: 'Followers', following: 'Following', commenters: 'People who commented', reactors: 'People who reacted', likers: 'People who liked', people: 'People list', people_friends: 'Friends', people_followers: 'Followers', people_following: 'Following', group_info: 'Group info',
-      post: 'Post', hashtag: 'Hashtag', videos: 'Videos', video: 'Video',
+      post: 'Post', hashtag: 'Hashtag', videos: 'Videos', video: 'Video', audit: 'Health check',
     },
-    preferred: ['name', 'username', 'title', 'comments', 'likesOnComments', 'author', 'text', 'caption', 'description', 'bio', 'price', 'email', 'emails', 'phone', 'phones', 'website', 'websites', 'followers', 'following', 'likes', 'comments', 'plays', 'shares', 'url', 'profileUrl'],
-    hidden: ['platform', 'kind', 'media', 'sourceUrl', 'collectedAt', 'avatar', 'image', 'cover', 'thumb', 'authorUrl', 'emailsInText', 'phonesInText'],
+    preferred: ['name', 'username', 'title', 'author', 'email', 'emails', 'phone', 'phones', 'website', 'websites', 'text', 'caption', 'description', 'category', 'followers', 'following', 'likes', 'comments', 'likesOnComments', 'plays', 'shares', 'price', 'bio', 'url', 'profileUrl'],
+    hidden: ['audit', 'platform', 'kind', 'media', 'sourceUrl', 'collectedAt', 'avatar', 'image', 'cover', 'thumb', 'authorUrl', 'emailsInText', 'phonesInText'],
     studios: [
       { id: 'facebook', name: 'Aurora Facebook Studio', color: '#1877f2', text: 'Likes, reactions, comments and follows on pages, groups and hashtags — previewed before it runs.' },
       { id: 'instagram', name: 'Aurora Instagram Studio', color: '#e1306c', text: 'Engage hashtags, profiles and followers lists with human-like pacing and local history.' },

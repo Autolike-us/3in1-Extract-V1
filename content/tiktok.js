@@ -9,7 +9,7 @@
     const seg = u.pathname.split('/').filter(Boolean);
     if (seg[0] === 'tag' && seg[1]) return { label: '#' + decodeURIComponent(seg[1]), primary: 'hashtag', kinds: [{ id: 'hashtag', label: 'Hashtag videos' }] };
     if (seg[0] && seg[0].startsWith('@') && seg[1] === 'video') return { label: 'Video', primary: 'comments', kinds: [{ id: 'comments', label: 'All comments' }, { id: 'commenters', label: 'People who commented' }, { id: 'video', label: 'This video (with download)' }] };
-    if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos (with files)' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }] };
+    if (seg[0] && seg[0].startsWith('@')) return { label: seg[0], primary: 'profile', kinds: [{ id: 'profile', label: 'Profile & bio contact' }, { id: 'videos', label: 'Videos (with files)' }, { id: 'followers', label: 'Followers' }, { id: 'following', label: 'Following' }, { id: 'audit', label: '✦ Health check (Aurora Audit)' }] };
     if (seg[0] === 'search' || seg[0] === 'explore' || seg[0] === 'discover') return { label: 'Search / discover', primary: 'videos', kinds: [{ id: 'videos', label: 'Videos on screen' }] };
     return { label: 'TikTok', primary: null, kinds: [] };
   }
@@ -96,25 +96,40 @@
   }
   const idFromHref = (h) => { const m = h.match(/\/@([^/?]+)\/video\/(\d+)/); return m ? { user: decodeURIComponent(m[1]), id: m[2] } : null; };
 
-  /** Open a video's own page data and return the full record (real author, stats, downloadable file). */
-  async function videoRecord(handle, id) {
-    const r = await fetch(`https://www.tiktok.com/@${encodeURIComponent(handle)}/video/${id}`, { credentials: 'include' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const html = await r.text();
-    const st = parseState(html);
-    let it = st['webapp.video-detail'] && st['webapp.video-detail'].itemInfo && st['webapp.video-detail'].itemInfo.itemStruct;
-    if ((!it || String(it.id) !== String(id)) && st.ItemModule && st.ItemModule[id]) it = st.ItemModule[id];
-    if (!it || String(it.id) !== String(id)) {
-      const vd = st['webapp.video-detail'];
-      throw new Error(`video data not found (html ${html.length}b, ${st.__none || 'scopes: ' + Object.keys(st).slice(0, 6).join('/')}${vd && vd.statusCode != null ? ', status ' + vd.statusCode : ''}${/captcha|verify/i.test(html.slice(0, 5000)) ? ', verification page' : ''})`);
-    }
+  /** Fallback: TikTok's own item-detail endpoint (same one the page calls), read with your session. */
+  async function videoViaApi(id) {
+    const u = `https://www.tiktok.com/api/item/detail/?aid=1988&app_language=en&app_name=tiktok_web&device_platform=web_pc&itemId=${id}`;
+    const r = await fetch(u, { credentials: 'include' });
+    if (!r.ok) throw new Error('api HTTP ' + r.status);
+    const body = await r.text();
+    let j; try { j = JSON.parse(body); } catch (_) { throw new Error(`api not JSON (${body.length}b)`); }
+    const it = j.itemInfo && j.itemInfo.itemStruct;
+    if (!it || String(it.id) !== String(id)) throw new Error(`api returned no video (status ${j.statusCode == null ? '?' : j.statusCode}${j.status_msg ? ' ' + j.status_msg : ''})`);
     return mapVideo(it);
+  }
+
+  /** Open a video's own page data and return the full record (real author, stats, downloadable file). Tries the video page, then the API. */
+  async function videoRecord(handle, id) {
+    const why = [];
+    try {
+      const r = await fetch(`https://www.tiktok.com/@${encodeURIComponent(handle)}/video/${id}`, { credentials: 'include' });
+      if (!r.ok) throw new Error('page HTTP ' + r.status);
+      const html = await r.text();
+      const st = parseState(html);
+      let it = st['webapp.video-detail'] && st['webapp.video-detail'].itemInfo && st['webapp.video-detail'].itemInfo.itemStruct;
+      if ((!it || String(it.id) !== String(id)) && st.ItemModule && st.ItemModule[id]) it = st.ItemModule[id];
+      if (it && String(it.id) === String(id)) return mapVideo(it);
+      const vd = st['webapp.video-detail'];
+      throw new Error(`page has no video data (html ${html.length}b, ${st.__none || 'scopes: ' + Object.keys(st).slice(0, 6).join('/')}${vd && vd.statusCode != null ? ', status ' + vd.statusCode : ''}${/captcha|verify/i.test(html.slice(0, 5000)) ? ', verification page' : ''})`);
+    } catch (e) { why.push(e.message); }
+    try { return await videoViaApi(id); } catch (e) { why.push(e.message); }
+    throw new Error('video data not found — ' + why.join('; '));
   }
 
   async function videos(ctx) {
     const grid = findGrid();
     if (!grid) throw new Error("Couldn't find the video grid on this page. Open a profile's Videos tab, a hashtag page or search results, then try again.");
-    ctx.log('info', 'video grid found via ' + grid.via, `items=${A.qa(ITEMS).length}`);
+    ctx.log('info', 'video grid found via ' + grid.via, `items=${A.qa(ITEMS).length} captured-from-page=${Object.keys(CAPTURED).length}`);
     const pageHandle = handleHere();
     const wantMedia = ctx.opts.media !== false;
     const seen = new Set();
@@ -181,6 +196,7 @@
   }
 
   async function commenters(ctx) { await A.commenters(ctx, comments); }
+  async function audit(ctx) { await A.runAudit(ctx, { platform: 'tiktok', profile, posts: videos, nPosts: 24, media: true, ready: () => !!A.q('[data-e2e="user-title"]') && !!A.q('[data-e2e="followers-count"], [data-e2e="user-bio"]') && !!findGrid() }); }
 
   /** Followers / following: ONLY rows inside the profile's list popup. */
   async function followList(ctx, which) {
@@ -214,8 +230,8 @@
 
   A.register('tiktok', {
     name: 'TikTok', hosts: /(^|\.)tiktok\.com$/, detect,
-    kinds: ['profile', 'videos', 'video', 'comments', 'commenters', 'followers', 'following', 'hashtag'],
-    tasks: { profile, videos, video, comments, commenters, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos },
+    kinds: ['profile', 'videos', 'video', 'comments', 'commenters', 'followers', 'following', 'hashtag', 'audit'],
+    tasks: { profile, videos, video, comments, commenters, followers: (c) => followList(c, 'followers'), following: (c) => followList(c, 'following'), hashtag: videos, audit },
     _test: { mapUser, mapVideo, detect },
   });
 })();

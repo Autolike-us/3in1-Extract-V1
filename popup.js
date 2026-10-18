@@ -31,7 +31,7 @@
     $('#start').onclick = async () => {
       const kind = $('#kind').value, kl = page.kinds.find((k) => k.id === kind).label;
       $('#start').disabled = true;
-      const r = await send({ type: 'startRun', tabId: tab.id, kind, goto: (page.kinds.find((k) => k.id === kind) || {}).goto, platform, label: `${p.name} · ${kl}`, opts: { limit: 200, delayMs: 1200, media: true } });
+      const r = await send({ type: 'startRun', tabId: tab.id, kind, goto: (page.kinds.find((k) => k.id === kind) || {}).goto, platform, label: `${p.name} · ${kl}`, opts: { limit: kind === 'audit' ? 30 : 200, delayMs: 1200, media: true } });
       if (r.ok) open('#extract'); else { $('#start').disabled = false; $('#start').textContent = r.error || 'Could not start'; }
     };
   }

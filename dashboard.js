@@ -10,7 +10,15 @@
   };
   const send = (m) => new Promise((res) => chrome.runtime.sendMessage(m, (r) => res(r || {})));
 
-  const S = { view: 'extract', platform: 'facebook', tabs: [], tabId: null, desc: null, kind: null, opts: { limit: 200, speed: 'normal', media: true }, runs: [], active: null, rows: [], page: 1, q: '', stripHidden: false };
+  const S = { view: 'extract', platform: 'facebook', tabs: [], tabId: null, desc: null, kind: null, opts: { limit: 200, speed: 'normal', media: true, audit: 20 }, runs: [], active: null, rows: [], page: 1, q: '', stripHidden: false };
+  const VERSION = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '';
+  const CHANGELOG = [{ v: '0.4.0', title: 'A fresher look, a quick tour, and more from Aurora', items: ['A new home with your totals, and a time-of-day greeting', 'A 30-second welcome tour (replay it any time from Help)', 'Discover Aurora Reply — AI replies to your comments in your own voice']}];
+  const TOUR = [
+    { t: 'Welcome to Aurora Extract ✦', d: 'Collect public data from Facebook, Instagram and TikTok into a clean spreadsheet. It is free, needs no account and everything stays on your computer.', art: '<div style="font-size:84px;filter:drop-shadow(0 8px 14px rgba(0,0,0,.25))">📥✨</div>' },
+    { t: 'Open a page, then pick it here', d: 'Open the profile, group, post or hashtag you want in another tab. Aurora Extract recognises it and shows it under step 2 — choose what to collect.', art: '<div class="mk"><div class="row"><div class="tile">Facebook</div><div class="tile on">Instagram</div><div class="tile">TikTok</div></div><div class="file">🌐 sunrisebakery_demo · tab open</div></div>' },
+    { t: 'Choose what to collect', d: 'Pick posts, comments, followers or more, how many items, and a gentle, normal or fast pace. Watch it work — and press Stop any time; what is collected is kept.', art: '<div class="mk"><div class="row"><span class="chip on">Profile</span><span class="chip">Posts</span><span class="chip">Followers</span></div><div class="bar"><i></i></div><div style="font-weight:700">Collecting… 124 of 200</div></div>' },
+    { t: 'Download your spreadsheet', d: 'Search and filter the results, then export CSV, Excel or JSON — or a ZIP of every photo and video. Try the free Health check too: a 0–100 score for any profile.', art: '<div class="mk"><div class="file">📄 results.csv</div><div class="file">📊 results.xlsx</div><div class="file">🖼️ photos-and-videos.zip</div></div>' },
+  ];
   const SPEED = { gentle: 2200, normal: 1200, fast: 600 };
 
   /* ---------- utilities ---------- */
@@ -19,6 +27,7 @@
     S.view = v;
     for (const s of document.querySelectorAll('.view')) s.hidden = s.id !== 'view-' + v;
     for (const b of document.querySelectorAll('nav button')) b.classList.toggle('on', b.dataset.view === v);
+    if (v === 'audit') refreshAudit();
     if (v === 'results') { if (!S.userPicked && S.runs[0]) S.active = S.runs[0].id; loadRows().then(renderResults); }
     try { history.replaceState(null, '', '#' + v); } catch (_) {}
   }
@@ -106,7 +115,7 @@
     host.innerHTML = `
       <div class="step"><span>3</span> What should we collect from “${h(page.label)}”?</div>
       <div class="card">
-        <div class="chips" style="margin-top:0" id="kinds">${page.kinds.map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}" ${k.goto ? 'title="We\'ll open the right page in this tab for you"' : ''}>${h(k.label)}${k.goto ? ' <small>↗</small>' : ''}</button>`).join('')}</div>
+        <div class="chips" style="margin-top:0" id="kinds">${page.kinds.filter((k) => k.id !== 'audit').map((k) => `<button class="chip ${k.id === S.kind ? 'on' : ''}" data-k="${k.id}" ${k.goto ? 'title="We\'ll open the right page in this tab for you"' : ''}>${h(k.label)}${k.goto ? ' <small>↗</small>' : ''}</button>`).join('')}</div>
         <div class="opts">
           <div><label for="oLimit">How many items (max)</label><input id="oLimit" type="number" min="1" max="50000" value="${S.opts.limit}"><div class="sub">We stop earlier if the page runs out.</div></div>
           <div><label>Speed</label><div class="seg" id="oSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div><div class="sub">Gentle is the kindest to your account.</div></div>
@@ -116,8 +125,8 @@
       </div>`;
     $('#kinds').onclick = (e) => { const b = e.target.closest('[data-k]'); if (b) { S.kind = b.dataset.k; renderOpts(); } };
     $('#oSpeed').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { S.opts.speed = b.dataset.s; renderOpts(); } };
-    $('#oLimit').onchange = (e) => { S.opts.limit = Math.max(1, Math.min(50000, +e.target.value || 200)); };
-    $('#oMedia').onchange = (e) => { S.opts.media = e.target.checked; };
+    if ($('#oLimit')) $('#oLimit').onchange = (e) => { S.opts.limit = Math.max(1, Math.min(50000, +e.target.value || 200)); };
+    if ($('#oMedia')) $('#oMedia').onchange = (e) => { S.opts.media = e.target.checked; };
     $('#goBtn').onclick = startRun;
   }
   async function startRun() {
@@ -125,16 +134,71 @@
     const kl = (page.kinds.find((k) => k.id === kind) || {}).label || kind;
     $('#goBtn').disabled = true;
     const kobj = page.kinds.find((k) => k.id === kind) || {};
-    const res = await send({ type: 'startRun', tabId: S.tabId, kind, goto: kobj.goto, platform: S.platform, label: `${C.platforms[S.platform].name} · ${kl}`, opts: { limit: S.opts.limit, delayMs: SPEED[S.opts.speed], media: S.opts.media } });
+    const res = await send({ type: 'startRun', tabId: S.tabId, kind, goto: kobj.goto, platform: S.platform, label: `${C.platforms[S.platform].name} · ${kl}`, opts: { limit: kind === 'audit' ? 30 : S.opts.limit, delayMs: SPEED[S.opts.speed], media: S.opts.media } });
     if (!res.ok) { toast(res.error || 'Could not start'); $('#goBtn').disabled = false; }
     else toast('Extraction started — you can keep browsing other tabs');
     await loadRuns(); renderLive();
   }
 
+
+  /* ---------- health check page ---------- */
+  async function refreshAudit() { await scanTabs(); await pickDefaultTab(); renderPlatforms(); renderAuditView(); }
+  function renderAuditView() {
+    const p = C.platforms[S.platform], mine = S.tabs.filter((t) => t.platform === S.platform);
+    $('#auditPlats').innerHTML = Object.entries(C.platforms).map(([id, pp]) => `
+      <button class="plat" style="--c:${pp.color}" data-ap="${id}" aria-pressed="${S.platform === id}">
+        <span class="ic">${pp.glyph}</span><span><b>${pp.name}</b><small>${pp.blurb}</small></span>
+        ${S.tabs.some((t) => t.platform === id) ? '<span class="found">● tab open</span>' : ''}
+      </button>`).join('');
+    $('#auditPlats').onclick = (e) => { const b = e.target.closest('[data-ap]'); if (!b) return; S.platform = b.dataset.ap; S.tabId = null; S.desc = null; pickDefaultTab().then(() => { renderPlatforms(); renderAuditView(); }); };
+    const tabs = $('#auditTabs'), run = $('#auditRun');
+    if (!mine.length) {
+      tabs.innerHTML = `<div class="empty"><h3>Open ${p.name} in a normal tab</h3><p>Log in as usual and open the profile or page you want to check, then come back here. Or jump straight to:</p>
+        <div class="chips">${p.open.slice(0, 1).map((o, i) => `<button class="chip" data-aopen="${i}">${h(o.label)}<small>${h(o.hint)}</small></button>`).join('')}</div></div>`;
+      tabs.onclick = (e) => { if (e.target.closest('[data-aopen]')) chrome.tabs.create({ url: p.open[0].url }); };
+      run.innerHTML = ''; return;
+    }
+    tabs.innerHTML = `<div class="tabs">${mine.map((t) => `
+      <button class="tabrow" data-at="${t.id}" aria-pressed="${t.id === S.tabId}">
+        <span class="t"><b>${h(t.title || t.url)}</b><small>${h(t.url.replace(/^https?:\/\//, '').slice(0, 90))}</small></span>
+        ${t.id === S.tabId && S.desc && S.desc.page ? `<span class="badge">${h(S.desc.page.label)}</span>` : ''}
+      </button>`).join('')}</div>
+      <div class="chips"><button class="chip" data-arefresh>↻ Refresh tabs</button></div>`;
+    tabs.onclick = async (e) => {
+      const r = e.target.closest('[data-at]');
+      if (r) { S.tabId = +r.dataset.at; S.desc = await describe(S.tabId); S.kind = S.desc && S.desc.page ? S.desc.page.primary : null; renderAuditView(); return; }
+      if (e.target.closest('[data-arefresh]')) await refreshAudit();
+    };
+    const ok = S.desc && S.desc.page && S.desc.page.kinds.some((k) => k.id === 'audit');
+    run.innerHTML = ok ? `
+      <div class="card lrun"><div class="ring2"><b>?</b></div>
+        <div style="flex:1;min-width:240px"><h3 style="margin:0 0 2px">${h(p.name)} · ${h(S.desc.page.label)}</h3><p style="margin:0;color:var(--muted)">Keep this tab in front while the check runs (about a minute).</p>
+          <div class="auditopts">
+            <div><label>Posts to read</label><div class="seg" id="aCount">${[[10, 'Quick'], [20, 'Standard'], [30, 'Deep']].map(([n, l]) => `<button data-n="${n}" class="${S.opts.audit === n ? 'on' : ''}">${l} <small>${n}</small></button>`).join('')}</div></div>
+            <div><label>Pace</label><div class="seg" id="aSpeed">${['gentle', 'normal', 'fast'].map((s) => `<button data-s="${s}" class="${S.opts.speed === s ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div></div></div>
+          <p class="sub" style="margin:10px 0 0">${S.opts.audit <= 10 ? 'Quick: usually under a minute.' : S.opts.audit >= 30 ? 'Deep: the most reliable score — Facebook can take several minutes.' : 'Standard: a good balance. Facebook may take a couple of minutes.'}</p></div>
+        <button class="btn primary big" id="auditGo">✦ Run health check</button></div>`
+      : `<div class="warn">${S.desc ? 'This page can\'t be scored. Open a <b>profile or page</b> (not a post, group or search) on ' + h(p.name) + ', then press “Refresh tabs”.' : 'This tab hasn\'t loaded the extension yet — reload the page once, then press “Refresh tabs”.'}</div>`;
+    if (ok) {
+      $('#aSpeed').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { S.opts.speed = b.dataset.s; renderAuditView(); } };
+      $('#aCount').onclick = (e) => { const b = e.target.closest('[data-n]'); if (b) { S.opts.audit = +b.dataset.n; renderAuditView(); } };
+      $('#auditGo').onclick = startAudit;
+    }
+  }
+  async function startAudit() {
+    $('#auditGo').disabled = true;
+    const res = await send({ type: 'startRun', tabId: S.tabId, kind: 'audit', platform: S.platform, label: `${C.platforms[S.platform].name} · Health check (Aurora Audit)`, opts: { limit: S.opts.audit, delayMs: SPEED[S.opts.speed], media: true } });
+    if (!res.ok) { toast(res.error || 'Could not start'); $('#auditGo').disabled = false; }
+    else toast('Health check started — keep that tab in front');
+    await loadRuns(); renderLive();
+  }
+
   /* ---------- live card ---------- */
-  function renderLive() {
-    const r = S.runs.find((x) => x.status === 'running' || x.status === 'paused') || (S.justDone && S.runs.find((x) => x.id === S.justDone));
-    const el = $('#liveCard');
+  function renderLive() { paintLive($('#liveCard')); paintLive($('#auditLive')); }
+  function paintLive(el) {
+    if (!el) return;
+    const mine = (x) => (x.kind === 'audit') === (el.id === 'auditLive'); // health-check progress lives on its own page
+    const r = S.runs.find((x) => mine(x) && (x.status === 'running' || x.status === 'paused')) || (S.justDone && S.runs.find((x) => x.id === S.justDone && mine(x)));
     if (!r) { el.hidden = true; return; }
     el.hidden = false;
     const live = r.status === 'running' || r.status === 'paused';
@@ -186,12 +250,14 @@
   function renderViewer() {
     const v = $('#viewer'), run = S.runs.find((r) => r.id === S.active);
     if (!run) return;
+    if (run.kind === 'audit' && S.rows[0] && S.rows[0].audit) return renderAudit(v, run);
     const rows = visibleRows();
     const cols = X.columns(S.rows, C.preferred).filter((c) => !C.hidden.includes(c));
     const PAGE = 100, shown = rows.slice(0, S.page * PAGE);
     const mediaCount = S.rows.reduce((n, r) => n + ((r.media && r.media.length) || 0), 0);
     const emails = new Set(); for (const r of S.rows) for (const k of ['email', 'emails', 'emailsInText']) [].concat(r[k] || []).forEach((e) => e && emails.add(e));
     const hasThumb = S.rows.some((r) => r.media && r.media.some((m) => m.type === 'image'));
+    const hasMedia = S.rows.some((r) => r.media && r.media.length);
     v.innerHTML = `
       <div class="vhead"><h2>${h(run.label)}</h2>
         <button class="btn" data-x="csv">CSV</button><button class="btn" data-x="xlsx">Excel</button><button class="btn" data-x="json">JSON</button><button class="btn" data-x="report" title="Copy a technical report for support">🐞 Debug</button>
@@ -200,8 +266,8 @@
         ${emails.size ? `<button class="btn" data-x="emails">✉ Copy ${emails.size} email${emails.size > 1 ? 's' : ''}</button>` : ''}
         <span style="flex:1"></span><button class="btn danger" data-x="delete">Delete</button></div>
       ${run.warning ? `<div class="warn" style="margin:14px 22px 0">⚠️ ${h(run.warning)}</div>` : ''}
-      ${rows.length ? `<div class="tablewrap"><table><thead><tr>${hasThumb ? '<th></th>' : ''}${cols.map((c) => `<th>${h(nice(c))}</th>`).join('')}</tr></thead><tbody>
-        ${shown.map((r) => `<tr>${hasThumb ? `<td>${thumb(r)}</td>` : ''}${cols.map((c) => cellHtml(r[c], c)).join('')}</tr>`).join('')}</tbody></table></div>
+      ${rows.length ? `<div class="tablewrap"><table><thead><tr>${hasThumb ? '<th></th>' : ''}${hasMedia ? '<th>Media</th>' : ''}${cols.map((c) => `<th>${h(nice(c))}</th>`).join('')}</tr></thead><tbody>
+        ${shown.map((r) => `<tr>${hasThumb ? `<td>${thumb(r)}</td>` : ''}${hasMedia ? `<td>${mediaCell(r)}</td>` : ''}${cols.map((c) => cellHtml(r[c], c)).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="vfoot"><span>Showing ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}</span>${shown.length < rows.length ? '<button class="btn" data-x="more">Show more</button>' : ''}</div>`
       : `<div class="empty-state"><div class="e">${run.status === 'running' ? '⏳' : '🔍'}</div><p>${run.status === 'running' ? 'Waiting for the first results…' : S.q ? 'No rows match your search.' : 'No data was found on that page.'}</p>${run.error ? `<p class="warn">${h(run.error)}</p>` : ''}${run.status !== 'running' ? '<p style="margin-top:14px"><button class="btn primary" data-x="report">🐞 Copy debug report</button></p><p class="note" style="margin-top:8px">Paste it in our <a href="' + C.telegram + '" target="_blank" rel="noopener">Telegram channel</a> and we\'ll fix the extractor for this page.</p>' : ''}</div>`}
       <div class="strip" id="strip" ${S.stripHidden || !rows.length ? 'hidden' : ''}><p>💡 Found the right people? <b>Aurora Studios</b> can like, follow and comment for you — hands-free, with human-like pacing. <a href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=results_strip" target="_blank" rel="noopener">3-day free trial →</a></p><button class="x" data-x="hidestrip" aria-label="Dismiss">✕</button></div>`;
@@ -209,6 +275,14 @@
     v.onclick = (e) => { const b = e.target.closest('[data-x]'); if (b) act(b.dataset.x, run, rows); };
   }
   const nice = (c) => c.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\bUrl\b/i, 'URL').replace(/\bId\b/i, 'ID').replace(/^./, (x) => x.toUpperCase());
+  const mediaCell = (r) => {
+    const ms = r.media || [], v = ms.filter((m) => m.type === 'video'), im = ms.filter((m) => m.type === 'image');
+    const parts = [];
+    if (v.length) parts.push(`<a class="mchip vid" href="${h(v[0].url)}" target="_blank" rel="noopener noreferrer" title="Open the video file">▶ ${v.length} video</a>`);
+    if (im.length) parts.push(`<span class="mchip">🖼 ${im.length} photo${im.length > 1 ? 's' : ''}</span>`);
+    if (r.videoMissing) parts.push('<span class="mchip warn" title="The site did not expose the video file for this post">no video file</span>');
+    return parts.join(' ') || '';
+  };
   const thumb = (r) => { const m = (r.media || []).find((x) => x.type === 'image'); return m ? `<img loading="lazy" referrerpolicy="no-referrer" src="${h(m.url)}" alt="">` : ''; };
   function cellHtml(v, c) {
     if (v == null || v === '') return '<td></td>';
@@ -220,8 +294,50 @@
     return `<td title="${h(s)}">${h(s)}</td>`;
   }
 
+
+  /* ---------- Aurora Audit report ---------- */
+  const AUD_COLOR = (s) => (s >= 85 ? 'var(--ok)' : s >= 70 ? '#4ea8de' : s >= 55 ? 'var(--warn)' : 'var(--bad)');
+  const DOT = { good: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)' };
+  function auditText(a, row) {
+    const L = [`Aurora Audit — ${row.name || row.username || ''} (${a.platform})`, `Score ${a.score}/100 · Grade ${a.grade} — ${a.verdict}`, ''];
+    for (const s of a.sections) L.push(`${s.label}: ${s.score == null ? 'not scored' : s.score + '/' + s.max}`);
+    if (a.topFixes.length) { L.push('', 'Top fixes:'); a.topFixes.forEach((f, i) => L.push(`${i + 1}. ${f.label} — ${f.tip}`)); }
+    return L.join('\n');
+  }
+  function renderAudit(v, run) {
+    const row = S.rows[0], a = row.audit, c = AUD_COLOR(a.score), st = a.stats;
+    const chip = (k, val) => (val == null || val === '' ? '' : `<span class="achip"><b>${h(String(val))}</b> ${h(k)}</span>`);
+    v.innerHTML = `
+      <div class="vhead"><h2>${h(run.label)}</h2>
+        <button class="btn" data-x="copyaudit">Copy summary</button><button class="btn" data-x="csv">CSV</button><button class="btn" data-x="xlsx">Excel</button><button class="btn" data-x="json">JSON</button><button class="btn" data-x="report" title="Copy a technical report for support">🐞 Debug</button>
+        <button class="btn danger" data-x="delete">Delete</button></div>
+      <div class="audit">
+        <div class="ahero">
+          <div class="agauge" style="--p:${a.score};--c:${c}"><div><b>${a.score}</b><small>out of 100</small></div></div>
+          <div class="ahead"><div class="agrade" style="background:${c}">${h(a.grade)}</div><h3>${h(row.name || row.username || 'This profile')}</h3><p>${h(a.verdict)}</p>
+            <div class="achips">${chip('followers', st.followers != null ? st.followers.toLocaleString() : null)}${chip('posts read', st.postsAnalysed)}${chip('posts / week', st.postsPerWeek)}${chip('days since last post', st.daysSinceLastPost)}${chip('hashtags / post', st.avgHashtags)}${chip('% engagement', st.engagementRate)}</div></div>
+        </div>
+        ${a.notes.length ? `<div class="warn">ℹ️ ${a.notes.map(h).join('<br>')}</div>` : ''}
+        ${a.topFixes.length ? `<h4 class="asub">Your top fixes</h4><ol class="afixes">${a.topFixes.map((f) => `<li><span class="adot" style="background:${DOT[f.level]}"></span><div><b>${h(f.label)}</b><span>${h(f.tip)}</span></div></li>`).join('')}</ol>` : '<div class="warn" style="background:rgba(18,165,148,.12);border-color:rgba(18,165,148,.35)">🎉 Nothing major to fix — keep it up.</div>'}
+        <h4 class="asub">Score breakdown</h4>
+        <div class="asections">${a.sections.map((s) => `
+          <details class="asec" ${s.findings.some((f) => f.level !== 'good') ? 'open' : ''}><summary><span class="aname">${h(s.label)}</span>
+            <span class="abar"><i style="width:${s.score == null ? 0 : Math.round((s.score / s.max) * 100)}%;background:${s.score == null ? 'var(--line)' : AUD_COLOR((s.score / s.max) * 100)}"></i></span>
+            <span class="anum">${s.score == null ? 'not scored' : s.score + ' / ' + s.max}</span></summary>
+            <ul>${s.findings.map((f) => `<li><span class="adot" style="background:${DOT[f.level]}"></span><div><b>${h(f.label)}</b><span>${h(f.detail)}</span>${f.tip ? `<em>→ ${h(f.tip)}</em>` : ''}</div></li>`).join('') || '<li class="note">No data available for this part.</li>'}</ul></details>`).join('')}
+        </div>
+        <p class="note" style="margin-top:18px">Scored on this computer from the profile and recent posts your own account can see. Benchmarks are rough guide values, not rules — every niche is different. No data left your browser.</p>
+        <div class="strip"><p>💡 Know what to fix — now keep it consistent. <b>Aurora Studios</b> can schedule the likes, follows and comments that keep an account active. <a href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=audit_report" target="_blank" rel="noopener">See Aurora Studios</a></p></div>
+      </div>`;
+    v.onclick = async (e) => {
+      const b = e.target.closest('[data-x]'); if (!b) return;
+      if (b.dataset.x === 'copyaudit') { try { await navigator.clipboard.writeText(auditText(a, row)); toast('Summary copied'); } catch (_) { toast('Could not copy'); } }
+      else act(b.dataset.x, run, S.rows);
+    };
+  }
+
   /* ---------- exports ---------- */
-  function exportRows(rows) { return rows.map((r) => { const o = { ...r }; o.mediaUrls = (r.media || []).map((m) => m.url); delete o.media; return o; }); }
+  function exportRows(rows) { return rows.map((r) => { const o = { ...r }; o.mediaUrls = (r.media || []).map((m) => m.url); delete o.media; delete o.audit; return o; }); }
   async function act(a, run, rows) {
     const base = `aurora-${slug(run.label)}-${new Date().toISOString().slice(0, 10)}`;
     const flat = exportRows(rows);
@@ -253,28 +369,38 @@
     for (const r of rows) (r.media || []).forEach((m, i) => items.push({ r, m, i }));
     if (!items.length) return toast('No media in these rows');
     const btn = $('[data-x=media]'); btn.disabled = true;
-    const files = [], index = [['file', 'type', 'source_row', 'url']];
-    let done = 0, bytes = 0, part = 1, failed = 0;
+    const files = [], index = [['file', 'type', 'source_row', 'url']], report = [];
+    let done = 0, bytes = 0, part = 1;
+    const tally = { video: 0, image: 0, failed: 0 };
+    const reasons = {};
     const flush = async (final) => {
-      if (!files.length) return;
+      if (!files.length && !final) return;
       const csv = index.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\r\n');
-      const zip = AuroraZip.makeZip(files.concat([{ name: 'index.csv', data: '﻿' + csv }]));
-      dl(`${base}-media-part${part}.zip`, zip, 'application/zip'); part++; files.length = 0; bytes = 0; index.length = 1;
+      const extra = [{ name: 'index.csv', data: '\ufeff' + csv }];
+      if (final || part === 1) extra.push({ name: 'download-report.txt', data: `Aurora Extract media download report\n${new Date().toISOString()}\nvideos saved: ${tally.video}  photos saved: ${tally.image}  failed: ${tally.failed}\n\n${report.join('\n')}\n` });
+      if (!files.length && !tally.failed) return;
+      dl(`${base}-media-part${part}.zip`, AuroraZip.makeZip(files.concat(extra)), 'application/zip'); part++; files.length = 0; bytes = 0; index.length = 1;
     };
+    const fail = (it, why) => { tally.failed++; reasons[why] = (reasons[why] || 0) + 1; report.push(`FAILED  ${it.m.type.padEnd(5)} ${why}  ${it.m.url.slice(0, 160)}`); };
     const queue = items.slice();
     const worker = async () => {
       while (queue.length) {
         const it = queue.shift();
         try {
-          const res = await fetch(it.m.url, { credentials: /tiktok/.test(it.m.url) ? 'include' : 'omit' });
-          if (!res.ok) throw new Error(res.status);
+          const res = await fetch(it.m.url, { credentials: /tiktok|facebook|fbcdn/.test(it.m.url) ? 'include' : 'omit' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const ct = (res.headers.get('content-type') || '').split(';')[0].trim();
           const buf = new Uint8Array(await res.arrayBuffer());
-          const ext = EXT[(res.headers.get('content-type') || '').split(';')[0]] || (it.m.type === 'video' ? 'mp4' : 'jpg');
+          // a "video" must really be a video: an image, web page or empty body means the link is expired or blocked
+          if (it.m.type === 'video' && (/^(image|text)\//.test(ct) || /json/.test(ct))) throw new Error(`expected video, server sent ${ct}`);
+          if (buf.length < 200) throw new Error(`empty file (${buf.length} bytes)`);
+          const ext = EXT[ct] || (it.m.type === 'video' ? 'mp4' : 'jpg');
           const who = safeName(it.r.author || it.r.username || it.r.name || it.r.title || run.label);
           const name = `${safeName(it.r.platform)}/${who}/${safeName(it.r.id || done)}_${it.i + 1}.${ext}`;
-          files.push({ name, data: buf }); bytes += buf.length;
+          files.push({ name, data: buf }); bytes += buf.length; tally[it.m.type === 'video' ? 'video' : 'image']++;
           index.push([name, it.m.type, it.r.url || it.r.profileUrl || '', it.m.url]);
-        } catch (_) { failed++; }
+          report.push(`ok      ${it.m.type.padEnd(5)} ${ct || '?'}  ${(buf.length / 1024).toFixed(0)} KB  ${name}`);
+        } catch (e) { fail(it, e.message || String(e)); }
         done++; btn.textContent = `⬇ ${done}/${items.length}…`;
         if (bytes > 350 * 1024 * 1024) await flush(false);
       }
@@ -282,12 +408,53 @@
     await Promise.all([worker(), worker(), worker(), worker()]);
     await flush(true);
     btn.disabled = false; btn.textContent = '⬇ Media ZIP';
-    toast(failed ? `Saved media — ${failed} file${failed > 1 ? 's' : ''} could not be fetched (expired links)` : 'Media ZIP saved ✓');
+    const top = Object.entries(reasons).sort((a, b) => b[1] - a[1])[0];
+    toast(`Saved ${tally.video} video${tally.video === 1 ? '' : 's'} + ${tally.image} photo${tally.image === 1 ? '' : 's'}${tally.failed ? ` — ${tally.failed} failed (${top[0]}). See download-report.txt in the ZIP` : ' ✓'}`);
   }
 
   /* ---------- studios tab ---------- */
   function renderStudios() {
     $('#studiosGrid').innerHTML = C.studios.map((s) => `<div class="studio" style="--c:${s.color}"><h3>${s.name}</h3><p>${s.text}</p><p style="margin-top:14px"><a class="btn" href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=studio_${s.id}" target="_blank" rel="noopener">Try it free →</a></p></div>`).join('');
+  }
+
+  /* ---------- home: greeting, totals, more from Aurora, tour, what's new ---------- */
+  function renderHome() {
+    const hr = new Date().getHours();
+    const el = $('#hello'); if (el) el.textContent = (hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening') + ' ✦';
+    const ex = S.runs.filter((r) => r.kind !== 'audit'), au = S.runs.filter((r) => r.kind === 'audit');
+    const items = ex.reduce((n, r) => n + (+r.count || 0), 0), plats = new Set(S.runs.map((r) => r.platform)).size;
+    $('#hsItems').textContent = items.toLocaleString();
+    $('#stats').innerHTML = [['📥', ex.length, 'Extractions'], ['🧾', items.toLocaleString(), 'Items collected'], ['✦', au.length, 'Health checks'], ['🌐', plats, plats === 1 ? 'Platform used' : 'Platforms used']].map(([i, n, l]) => `<div class="stat"><i>${i}</i><b>${n}</b><span>${l}</span></div>`).join('');
+  }
+  const UTM = (c) => `${C.site}${c}?utm_source=extract&utm_medium=extension&utm_campaign=more`;
+  function renderMore() {
+    $('#more').innerHTML = `<a class="moreitem" href="${UTM('/reply/')}" target="_blank" rel="noopener"><span class="ic">💬</span><b>Aurora Reply <span class="tagnew">New</span></b><span class="d">AI replies to your Facebook, Instagram and TikTok comments, in your own voice. You press Send.</span></a>
+      <button class="moreitem" data-go="studios"><span class="ic">⚡</span><b>Aurora Studios <span class="tagnew">3-day trial</span></b><span class="d">Like, comment and follow at a human pace — Facebook, Instagram and TikTok.</span></button>
+      <a class="moreitem" href="https://t.me/+GqmNSvnMJxhhMzJh" target="_blank" rel="noopener"><span class="ic">📣</span><b>Join the community</b><span class="d">Report bugs, request features and share ideas in the Aurora Studios Report channel.</span></a>`;
+  }
+  let tourI = 0;
+  function showTour(i) {
+    tourI = i; const t = TOUR[i], last = i === TOUR.length - 1, m = $('#tour'); m.hidden = false;
+    m.innerHTML = `<div class="tour"><div class="art">${t.art}</div><div class="tbody"><h2>${t.t}</h2><p>${t.d}</p></div><div class="foot"><div class="dots">${TOUR.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>${i ? '<button class="btn" data-tour="back">Back</button>' : '<button class="btn" data-tour="skip">Skip</button>'}<button class="btn primary" data-tour="${last ? 'done' : 'next'}">${last ? 'Got it ✓' : 'Next'}</button></div></div>`;
+  }
+  async function endTour() { $('#tour').hidden = true; const p = await store.get('prefs', {}); p.onboarded = true; p.seen = VERSION; await store.set({ prefs: p }); renderWhatsNew(); }
+  async function renderWhatsNew() {
+    const p = await store.get('prefs', {}), el = $('#whatsNew'), c = CHANGELOG[0];
+    const show = !!VERSION && p.onboarded && p.seen !== VERSION && c;
+    el.hidden = !show; if (!show) return;
+    el.innerHTML = `<div style="font-size:26px">🎉</div><div class="grow"><b>What’s new in Aurora Extract ${h(VERSION)} — ${h(c.title)}</b><ul>${c.items.map((x) => `<li>${h(x)}</li>`).join('')}</ul></div><button class="btn sm" id="wnDismiss">Got it</button>`;
+  }
+  async function homeInit() {
+    renderHome(); renderMore(); await renderWhatsNew();
+    const p = await store.get('prefs', {});
+    if (!p.onboarded) { if (S.runs.length) { p.onboarded = true; p.seen = ''; await store.set({ prefs: p }); renderWhatsNew(); } else showTour(0); }
+    document.addEventListener('click', async (e) => {
+      const tb = e.target.closest('[data-tour]'); if (tb) { const a = tb.dataset.tour; if (a === 'next') showTour(tourI + 1); else if (a === 'back') showTour(tourI - 1); else endTour(); return; }
+      if (e.target.id === 'wnDismiss') { const q = await store.get('prefs', {}); q.seen = VERSION; await store.set({ prefs: q }); renderWhatsNew(); return; }
+      const g = e.target.closest('[data-go]'); if (g) setView(g.dataset.go);
+    });
+    const tb = $('#tourBtn'); if (tb) tb.onclick = () => showTour(0);
+    setInterval(renderHome, 60000); document.addEventListener('visibilitychange', () => { if (!document.hidden) renderHome(); });
   }
 
   /* ---------- boot ---------- */
@@ -304,7 +471,8 @@
     if (S.tabs[0]) S.platform = S.tabs[0].platform;
     await pickDefaultTab(); render(); renderLive();
     const v = (location.hash || '').replace('#', '');
-    setView(['extract', 'results', 'studios', 'help'].includes(v) ? v : 'extract');
+    setView(['extract', 'audit', 'results', 'studios', 'help'].includes(v) ? v : 'extract');
+    await homeInit();
     let t;
     chrome.storage.onChanged.addListener((ch) => {
       clearTimeout(t);
@@ -314,7 +482,7 @@
         const nowRun = wasRunning && S.runs.find((r) => r.id === wasRunning.id);
         if (nowRun && nowRun.status !== 'running' && nowRun.status !== 'paused') { S.justDone = nowRun.id; S.active = nowRun.id; if (nowRun.status === 'done') toast(`Done — ${nowRun.count} items collected`); }
         await loadRows();
-        renderLive(); if (S.view === 'results') renderResults();
+        renderLive(); renderHome(); if (S.view === 'results') renderResults();
       }, 350);
     });
     chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === 'complete') { clearTimeout(init._t); init._t = setTimeout(async () => { await scanTabs(); renderPlatforms(); if (S.view === 'extract') { await pickDefaultTab(); } }, 600); } });

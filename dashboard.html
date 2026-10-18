@@ -12,6 +12,7 @@
     <a class="brand" href="#extract"><span class="logo" aria-hidden="true"></span><span>Aurora <b>Extract</b></span></a>
     <nav id="nav">
       <button data-view="extract" class="on"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>Extract</button>
+      <button data-view="audit"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 6.3L21 12l-6.8 2.7L12 21l-2.2-6.3L3 12l6.8-2.7z"/></svg>Health check <span class="pill hot">new</span></button>
       <button data-view="results"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Results <span class="pill" id="navCount" hidden>0</span></button>
       <button data-view="studios"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Automate it <span class="pill hot">new</span></button>
       <button data-view="help"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 114 2c-.9.6-1.5 1-1.5 2M12 17h.01"/></svg>Help &amp; privacy</button>
@@ -27,11 +28,17 @@
   <main>
     <!-- ================= EXTRACT ================= -->
     <section id="view-extract" class="view">
-      <header class="hero">
-        <p class="eyebrow">Free · No account · No limits on your own data</p>
-        <h1>Collect public data from <span class="grad">Facebook, Instagram &amp; TikTok</span></h1>
-        <p class="lead">Open a page, press start, and download a clean spreadsheet — profiles, groups, Marketplace, posts, comments, followers, hashtags and public business contacts. Photos and videos too.</p>
+      <div class="banner" id="whatsNew" hidden></div>
+      <header class="herocard">
+        <div class="hgrow">
+          <p class="hello" id="hello">Welcome ✦</p>
+          <h1>Collect public data from <span class="grad">Facebook, Instagram &amp; TikTok</span></h1>
+          <p class="lead">Open a page, press start, and download a clean spreadsheet — profiles, groups, Marketplace, posts, comments, followers, hashtags and public business contacts. Photos and videos too.</p>
+          <p class="hfine">Free · No account · Everything stays on this computer</p>
+        </div>
+        <div class="hbig"><b id="hsItems">0</b><small>items collected</small></div>
       </header>
+      <div class="stats" id="stats"></div>
 
       <div id="liveCard" class="card live" hidden></div>
 
@@ -45,6 +52,31 @@
 
       <div class="step"><span>✦</span> What you can collect</div>
       <div class="tiles" id="tiles"></div>
+
+      <div class="step"><span>✦</span> More from Aurora</div>
+      <div class="more" id="more"></div>
+    </section>
+
+    <!-- ================= HEALTH CHECK ================= -->
+    <section id="view-audit" class="view" hidden>
+      <header class="hero">
+        <p class="eyebrow">Aurora Audit · Free · Runs on your computer</p>
+        <h1>How healthy is your <span class="grad">profile or page?</span></h1>
+        <p class="lead">Get a 0–100 score and a short list of fixes in about a minute. We read the profile and its latest posts, and nothing leaves this browser.</p>
+      </header>
+      <div class="lgrid">
+        <div class="lcard"><i>📝</i><b>Bio &amp; profile</b><span>Is it clear and complete?</span></div>
+        <div class="lcard"><i>🔗</i><b>Link &amp; contact</b><span>Can people reach you?</span></div>
+        <div class="lcard"><i>📅</i><b>Posting rhythm</b><span>Steady and recent?</span></div>
+        <div class="lcard"><i>#️⃣</i><b>Captions &amp; hashtags</b><span>Working for you?</span></div>
+        <div class="lcard"><i>💬</i><b>Engagement</b><span>Do people respond?</span></div>
+      </div>
+      <div id="auditLive" class="card live" hidden></div>
+      <div class="step"><span>1</span> Choose a platform</div>
+      <div class="platforms" id="auditPlats"></div>
+      <div class="step"><span>2</span> Pick the profile or page you have open</div>
+      <div id="auditTabs"></div>
+      <div id="auditRun"></div>
     </section>
 
     <!-- ================= RESULTS ================= -->
@@ -68,6 +100,7 @@
     <section id="view-help" class="view" hidden>
       <header class="slim"><h1>Help &amp; privacy</h1></header>
       <div class="help">
+        <div class="card"><h3>🧭 Quick tour</h3><p>A 30-second look at how Aurora Extract works.</p><p style="margin-top:12px"><button class="btn primary" id="tourBtn">▶ Start the tour</button></p></div>
         <div class="card"><h3>🔒 Your data never leaves your computer</h3><p>Aurora Extract has no server. Everything you collect is stored in this browser and exported by you. We never see your account, cookies, messages or results.</p></div>
         <div class="card"><h3>👀 Only what you can already see</h3><p>The extension reads pages and lists that your own logged-in account can open. Private profiles, private groups you haven't joined and anyone's hidden information stay hidden. Emails and phone numbers are collected only when a person or business has made them public (bio, About section, listing text, business contact button).</p></div>
         <div class="card"><h3>⚖️ Use it responsibly</h3><p>You are responsible for following each platform's terms and the privacy and marketing laws that apply to you (GDPR, CAN-SPAM, PECR, CCPA and local rules). Don't spam people you extract; use contacts for legitimate, relevant outreach, and honour opt-outs.</p></div>
@@ -79,6 +112,7 @@
     </section>
   </main>
 </div>
+<div class="modal" id="tour" hidden></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="core/zip.js"></script>
 <script src="core/export.js"></script>
