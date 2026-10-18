@@ -11,6 +11,14 @@
   const send = (m) => new Promise((res) => chrome.runtime.sendMessage(m, (r) => res(r || {})));
 
   const S = { view: 'extract', platform: 'facebook', tabs: [], tabId: null, desc: null, kind: null, opts: { limit: 200, speed: 'normal', media: true, audit: 20 }, runs: [], active: null, rows: [], page: 1, q: '', stripHidden: false };
+  const VERSION = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '';
+  const CHANGELOG = [{ v: '0.4.0', title: 'A fresher look, a quick tour, and more from Aurora', items: ['A new home with your totals, and a time-of-day greeting', 'A 30-second welcome tour (replay it any time from Help)', 'Discover Aurora Reply — AI replies to your comments in your own voice']}];
+  const TOUR = [
+    { t: 'Welcome to Aurora Extract ✦', d: 'Collect public data from Facebook, Instagram and TikTok into a clean spreadsheet. It is free, needs no account and everything stays on your computer.', art: '<div style="font-size:84px;filter:drop-shadow(0 8px 14px rgba(0,0,0,.25))">📥✨</div>' },
+    { t: 'Open a page, then pick it here', d: 'Open the profile, group, post or hashtag you want in another tab. Aurora Extract recognises it and shows it under step 2 — choose what to collect.', art: '<div class="mk"><div class="row"><div class="tile">Facebook</div><div class="tile on">Instagram</div><div class="tile">TikTok</div></div><div class="file">🌐 sunrisebakery_demo · tab open</div></div>' },
+    { t: 'Choose what to collect', d: 'Pick posts, comments, followers or more, how many items, and a gentle, normal or fast pace. Watch it work — and press Stop any time; what is collected is kept.', art: '<div class="mk"><div class="row"><span class="chip on">Profile</span><span class="chip">Posts</span><span class="chip">Followers</span></div><div class="bar"><i></i></div><div style="font-weight:700">Collecting… 124 of 200</div></div>' },
+    { t: 'Download your spreadsheet', d: 'Search and filter the results, then export CSV, Excel or JSON — or a ZIP of every photo and video. Try the free Health check too: a 0–100 score for any profile.', art: '<div class="mk"><div class="file">📄 results.csv</div><div class="file">📊 results.xlsx</div><div class="file">🖼️ photos-and-videos.zip</div></div>' },
+  ];
   const SPEED = { gentle: 2200, normal: 1200, fast: 600 };
 
   /* ---------- utilities ---------- */
@@ -409,6 +417,46 @@
     $('#studiosGrid').innerHTML = C.studios.map((s) => `<div class="studio" style="--c:${s.color}"><h3>${s.name}</h3><p>${s.text}</p><p style="margin-top:14px"><a class="btn" href="${C.site}?utm_source=extract&utm_medium=extension&utm_campaign=studio_${s.id}" target="_blank" rel="noopener">Try it free →</a></p></div>`).join('');
   }
 
+  /* ---------- home: greeting, totals, more from Aurora, tour, what's new ---------- */
+  function renderHome() {
+    const hr = new Date().getHours();
+    const el = $('#hello'); if (el) el.textContent = (hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening') + ' ✦';
+    const ex = S.runs.filter((r) => r.kind !== 'audit'), au = S.runs.filter((r) => r.kind === 'audit');
+    const items = ex.reduce((n, r) => n + (+r.count || 0), 0), plats = new Set(S.runs.map((r) => r.platform)).size;
+    $('#hsItems').textContent = items.toLocaleString();
+    $('#stats').innerHTML = [['📥', ex.length, 'Extractions'], ['🧾', items.toLocaleString(), 'Items collected'], ['✦', au.length, 'Health checks'], ['🌐', plats, plats === 1 ? 'Platform used' : 'Platforms used']].map(([i, n, l]) => `<div class="stat"><i>${i}</i><b>${n}</b><span>${l}</span></div>`).join('');
+  }
+  const UTM = (c) => `${C.site}${c}?utm_source=extract&utm_medium=extension&utm_campaign=more`;
+  function renderMore() {
+    $('#more').innerHTML = `<a class="moreitem" href="${UTM('/reply/')}" target="_blank" rel="noopener"><span class="ic">💬</span><b>Aurora Reply <span class="tagnew">New</span></b><span class="d">AI replies to your Facebook, Instagram and TikTok comments, in your own voice. You press Send.</span></a>
+      <button class="moreitem" data-go="studios"><span class="ic">⚡</span><b>Aurora Studios <span class="tagnew">3-day trial</span></b><span class="d">Like, comment and follow at a human pace — Facebook, Instagram and TikTok.</span></button>
+      <a class="moreitem" href="https://t.me/+GqmNSvnMJxhhMzJh" target="_blank" rel="noopener"><span class="ic">📣</span><b>Join the community</b><span class="d">Report bugs, request features and share ideas in the Aurora Studios Report channel.</span></a>`;
+  }
+  let tourI = 0;
+  function showTour(i) {
+    tourI = i; const t = TOUR[i], last = i === TOUR.length - 1, m = $('#tour'); m.hidden = false;
+    m.innerHTML = `<div class="tour"><div class="art">${t.art}</div><div class="tbody"><h2>${t.t}</h2><p>${t.d}</p></div><div class="foot"><div class="dots">${TOUR.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>${i ? '<button class="btn" data-tour="back">Back</button>' : '<button class="btn" data-tour="skip">Skip</button>'}<button class="btn primary" data-tour="${last ? 'done' : 'next'}">${last ? 'Got it ✓' : 'Next'}</button></div></div>`;
+  }
+  async function endTour() { $('#tour').hidden = true; const p = await store.get('prefs', {}); p.onboarded = true; p.seen = VERSION; await store.set({ prefs: p }); renderWhatsNew(); }
+  async function renderWhatsNew() {
+    const p = await store.get('prefs', {}), el = $('#whatsNew'), c = CHANGELOG[0];
+    const show = !!VERSION && p.onboarded && p.seen !== VERSION && c;
+    el.hidden = !show; if (!show) return;
+    el.innerHTML = `<div style="font-size:26px">🎉</div><div class="grow"><b>What’s new in Aurora Extract ${h(VERSION)} — ${h(c.title)}</b><ul>${c.items.map((x) => `<li>${h(x)}</li>`).join('')}</ul></div><button class="btn sm" id="wnDismiss">Got it</button>`;
+  }
+  async function homeInit() {
+    renderHome(); renderMore(); await renderWhatsNew();
+    const p = await store.get('prefs', {});
+    if (!p.onboarded) { if (S.runs.length) { p.onboarded = true; p.seen = ''; await store.set({ prefs: p }); renderWhatsNew(); } else showTour(0); }
+    document.addEventListener('click', async (e) => {
+      const tb = e.target.closest('[data-tour]'); if (tb) { const a = tb.dataset.tour; if (a === 'next') showTour(tourI + 1); else if (a === 'back') showTour(tourI - 1); else endTour(); return; }
+      if (e.target.id === 'wnDismiss') { const q = await store.get('prefs', {}); q.seen = VERSION; await store.set({ prefs: q }); renderWhatsNew(); return; }
+      const g = e.target.closest('[data-go]'); if (g) setView(g.dataset.go);
+    });
+    const tb = $('#tourBtn'); if (tb) tb.onclick = () => showTour(0);
+    setInterval(renderHome, 60000); document.addEventListener('visibilitychange', () => { if (!document.hidden) renderHome(); });
+  }
+
   /* ---------- boot ---------- */
   function render() { renderPlatforms(); renderTabs(); }
   async function init() {
@@ -424,6 +472,7 @@
     await pickDefaultTab(); render(); renderLive();
     const v = (location.hash || '').replace('#', '');
     setView(['extract', 'audit', 'results', 'studios', 'help'].includes(v) ? v : 'extract');
+    await homeInit();
     let t;
     chrome.storage.onChanged.addListener((ch) => {
       clearTimeout(t);
@@ -433,7 +482,7 @@
         const nowRun = wasRunning && S.runs.find((r) => r.id === wasRunning.id);
         if (nowRun && nowRun.status !== 'running' && nowRun.status !== 'paused') { S.justDone = nowRun.id; S.active = nowRun.id; if (nowRun.status === 'done') toast(`Done — ${nowRun.count} items collected`); }
         await loadRows();
-        renderLive(); if (S.view === 'results') renderResults();
+        renderLive(); renderHome(); if (S.view === 'results') renderResults();
       }, 350);
     });
     chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === 'complete') { clearTimeout(init._t); init._t = setTimeout(async () => { await scanTabs(); renderPlatforms(); if (S.view === 'extract') { await pickDefaultTab(); } }, 600); } });

@@ -28,11 +28,17 @@
   <main>
     <!-- ================= EXTRACT ================= -->
     <section id="view-extract" class="view">
-      <header class="hero">
-        <p class="eyebrow">Free · No account · No limits on your own data</p>
-        <h1>Collect public data from <span class="grad">Facebook, Instagram &amp; TikTok</span></h1>
-        <p class="lead">Open a page, press start, and download a clean spreadsheet — profiles, groups, Marketplace, posts, comments, followers, hashtags and public business contacts. Photos and videos too.</p>
+      <div class="banner" id="whatsNew" hidden></div>
+      <header class="herocard">
+        <div class="hgrow">
+          <p class="hello" id="hello">Welcome ✦</p>
+          <h1>Collect public data from <span class="grad">Facebook, Instagram &amp; TikTok</span></h1>
+          <p class="lead">Open a page, press start, and download a clean spreadsheet — profiles, groups, Marketplace, posts, comments, followers, hashtags and public business contacts. Photos and videos too.</p>
+          <p class="hfine">Free · No account · Everything stays on this computer</p>
+        </div>
+        <div class="hbig"><b id="hsItems">0</b><small>items collected</small></div>
       </header>
+      <div class="stats" id="stats"></div>
 
       <div id="liveCard" class="card live" hidden></div>
 
@@ -46,6 +52,9 @@
 
       <div class="step"><span>✦</span> What you can collect</div>
       <div class="tiles" id="tiles"></div>
+
+      <div class="step"><span>✦</span> More from Aurora</div>
+      <div class="more" id="more"></div>
     </section>
 
     <!-- ================= HEALTH CHECK ================= -->
@@ -91,6 +100,7 @@
     <section id="view-help" class="view" hidden>
       <header class="slim"><h1>Help &amp; privacy</h1></header>
       <div class="help">
+        <div class="card"><h3>🧭 Quick tour</h3><p>A 30-second look at how Aurora Extract works.</p><p style="margin-top:12px"><button class="btn primary" id="tourBtn">▶ Start the tour</button></p></div>
         <div class="card"><h3>🔒 Your data never leaves your computer</h3><p>Aurora Extract has no server. Everything you collect is stored in this browser and exported by you. We never see your account, cookies, messages or results.</p></div>
         <div class="card"><h3>👀 Only what you can already see</h3><p>The extension reads pages and lists that your own logged-in account can open. Private profiles, private groups you haven't joined and anyone's hidden information stay hidden. Emails and phone numbers are collected only when a person or business has made them public (bio, About section, listing text, business contact button).</p></div>
         <div class="card"><h3>⚖️ Use it responsibly</h3><p>You are responsible for following each platform's terms and the privacy and marketing laws that apply to you (GDPR, CAN-SPAM, PECR, CCPA and local rules). Don't spam people you extract; use contacts for legitimate, relevant outreach, and honour opt-outs.</p></div>
@@ -102,6 +112,7 @@
     </section>
   </main>
 </div>
+<div class="modal" id="tour" hidden></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="core/zip.js"></script>
 <script src="core/export.js"></script>

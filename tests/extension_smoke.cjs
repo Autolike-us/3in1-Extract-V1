@@ -24,7 +24,7 @@ const cdn = https.createServer({ key: fs.readFileSync(tmp + '/k.pem'), cert: fs.
     <a href="/marketplace/item/1001/"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><div>$250</div><div>Road bike</div><div>Austin, TX</div></a>
     <a href="/marketplace/item/1002/"><div>$40</div><div>Lamp</div><div>Dallas, TX</div></a>` }));
   const page = await ctx.newPage(); await page.goto('https://www.facebook.com/marketplace/austin'); await page.waitForTimeout(800);
-  const dash = await ctx.newPage(); await dash.goto(`chrome-extension://${id}/dashboard.html`); await dash.waitForTimeout(800);
+  const dash = await ctx.newPage(); await dash.goto(`chrome-extension://${id}/dashboard.html`); await dash.waitForTimeout(800); await dash.click('[data-tour=skip]');
   const t = await dash.textContent('#tabsArea');
   if (!/Marketplace/.test(t)) throw new Error('dashboard did not list the Marketplace tab: ' + t);
   console.log('PASS dashboard lists the open Facebook tab + detects page type');

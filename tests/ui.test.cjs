@@ -149,5 +149,26 @@ const stub = ([runs, rows, tabs, vrows, arows]) => {
   check('Extract page shows no health-check progress card (it lives on the Health check page)', await pg.evaluate(() => document.querySelector('#liveCard').hidden));
   check('no script errors on the Health check page', errs.length === 0, errs.join(' | '));
   await pg.close();
+  // ---- 0.4: home, tour, what's new, more from Aurora
+  ({ pg, errs } = await open('dashboard.html', libs));
+  check('home: a time-of-day greeting, the totals from saved runs, and the "more from Aurora" cards', /Good (morning|afternoon|evening)/.test(await pg.textContent('#hello')) && (await pg.textContent('#hsItems')) === '133' && (await pg.locator('#stats .stat').count()) === 4 && (await pg.locator('#more .moreitem').count()) === 3 && /Aurora Reply/.test(await pg.textContent('#more')));
+  const hi = await pg.evaluate(() => { const orig = Date.prototype.getHours; const out = []; for (const h of [8, 14, 20]) { Date.prototype.getHours = () => h; document.dispatchEvent(new Event('visibilitychange')); out.push(document.querySelector('#hello').textContent); } Date.prototype.getHours = orig; return out; });
+  check('the greeting follows the time of day: morning, afternoon, evening', /morning/.test(hi[0]) && /afternoon/.test(hi[1]) && /evening/.test(hi[2]), JSON.stringify(hi));
+  check('what is new: shown after an update (existing users), then dismissed for good', !(await pg.isHidden('#whatsNew')) && /9\.9\.9/.test(await pg.textContent('#whatsNew')) && await (async () => { await pg.click('#wnDismiss'); await pg.waitForTimeout(150); return (await pg.isHidden('#whatsNew')) && (await pg.evaluate(() => chrome.storage.local.get('prefs'))).prefs.seen === '9.9.9'; })());
+  check('home: "Automate it" card opens the studios page', await (async () => { await pg.click('#more [data-go=studios]'); await pg.waitForTimeout(100); return !(await pg.isHidden('#view-studios')); })());
+  await pg.close();
+  ({ pg, errs } = await open('dashboard.html', libs, undefined, false, []));
+  check('tour: a brand-new install opens the welcome tour', !(await pg.isHidden('#tour')) && /Welcome to Aurora Extract/.test(await pg.textContent('#tour')));
+  await pg.click('[data-tour=next]'); await pg.waitForTimeout(80);
+  check('tour: step 2 shows how to pick the open page', /Open a page, then pick it here/.test(await pg.textContent('#tour')) && (await pg.locator('.mk .tile').count()) === 3);
+  await pg.click('[data-tour=next]'); await pg.click('[data-tour=next]'); await pg.waitForTimeout(80);
+  check('tour: the last step is about downloading the spreadsheet', /Download your spreadsheet/.test(await pg.textContent('#tour')));
+  await pg.screenshot({ path: path.join(OUT, '12-tour.png') });
+  await pg.click('[data-tour=done]'); await pg.waitForTimeout(150);
+  check('tour: finishing closes it for good', (await pg.isHidden('#tour')) && (await pg.evaluate(() => chrome.storage.local.get('prefs'))).prefs.onboarded === true);
+  await pg.click('nav [data-view=help]'); await pg.click('#tourBtn'); await pg.waitForTimeout(80);
+  check('help: the tour can be replayed', !(await pg.isHidden('#tour')));
+  check('no script errors on the new home', errs.length === 0, errs.join(' | '));
+  await pg.close();
   await browser.close(); done();
 })().catch((e) => { console.error(e); process.exit(1); });
