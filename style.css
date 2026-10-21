@@ -252,3 +252,8 @@ nav button.on svg{stroke:#fff}
 @keyframes grow{from{width:25%}to{width:92%}}
 .mk .file{display:flex;align-items:center;gap:8px;border:1.5px solid #e4e8ea;border-radius:12px;padding:8px 12px;font-weight:700}
 @media (max-width:900px){.stats{grid-template-columns:1fr 1fr}.herocard{padding:26px}}
+
+.aiup{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:18px;border-radius:16px;padding:16px 20px;background:linear-gradient(135deg,rgba(124,58,237,.09),rgba(192,38,211,.07));border:1px solid rgba(124,58,237,.28)}
+.aiup>div:first-child{flex:1;min-width:260px}.aiup h4{margin:0 0 4px;font-size:16px}.aiup p{margin:0;font-size:13.5px;color:var(--muted);line-height:1.45}
+.aiup .aibtns{display:flex;gap:10px;flex-wrap:wrap}
+.aiup .btn.primary{background:linear-gradient(90deg,#7c3aed,#c026d3);border:0;color:#fff}

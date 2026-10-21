@@ -125,6 +125,14 @@ const stub = ([runs, rows, tabs, vrows, arows]) => {
   await pg.click('[data-x=copyaudit]'); await pg.waitForTimeout(150);
   const clip = await pg.evaluate(() => window.__clip);
   check('Copy summary puts the score, sections and fixes on the clipboard', new RegExp('Score ' + AREPORT.score + '/100').test(clip) && /Top fixes:/.test(clip) && /Bio & profile:/.test(clip));
+  check('the report offers "Improve with AI" with two buttons and says nothing is sent from here', !!(await pg.$('.aiup [data-x=copyai]')) && !!(await pg.$('.aiup [data-x=copyaionly]')) && /Nothing is sent from here/.test(await pg.textContent('.aiup')));
+  await pg.evaluate(() => { window.__opened = []; window.open = (u) => { window.__opened.push(u); return null; }; window.__clip = ''; });
+  await pg.click('[data-x=copyaionly]'); await pg.waitForTimeout(150);
+  const aiClip = await pg.evaluate(() => ({ clip: window.__clip, opened: window.__opened.length }));
+  check('Copy audit only puts a plain summary (score, bio, captions, fixes) on the clipboard and opens nothing', /^AURORA AUDIT · Instagram · /.test(aiClip.clip) && new RegExp('score ' + AREPORT.score + '/100').test(aiClip.clip) && /\nBIO: /.test(aiClip.clip) && /TOP FIXES: 1\. /.test(aiClip.clip) && aiClip.clip.length > 80 && aiClip.opened === 0, aiClip.clip);
+  await pg.click('[data-x=copyai]'); await pg.waitForTimeout(150);
+  const aiOpen = await pg.evaluate(() => window.__opened);
+  check('Copy audit for AI opens getaurorastudios.com/audit-ai in a new tab', aiOpen.length === 1 && /^https:\/\/getaurorastudios\.com\/audit-ai\/\?utm_source=extract/.test(aiOpen[0]), aiOpen);
   const acsv = fs.readFileSync(await (async () => { const [d] = await Promise.all([pg.waitForEvent('download'), pg.click('[data-x=csv]')]); const f = path.join(OUT, d.suggestedFilename()); await d.saveAs(f); return f; })(), 'utf8');
   const hdr = acsv.split('\r\n')[0].split(',');
   check('audit CSV is one tidy row: score, grade, section scores, top fixes — and no raw JSON blob', acsv.split('\r\n').length === 2 && hdr.includes('score') && hdr.includes('grade') && hdr.includes('profileScore') && hdr.includes('topFixes') && !hdr.includes('audit'));
