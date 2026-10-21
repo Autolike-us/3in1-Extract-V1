@@ -24,6 +24,8 @@ const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
   check('sections add up to the score and none exceed their maximum', good.sections.every((s) => s.score <= s.max) && Math.abs(good.sections.reduce((a, s) => a + (s.score || 0), 0) - good.score) <= 1, JSON.stringify(good.sections.map((s) => s.score)));
   check('stats are filled in from the posts', good.stats.postsAnalysed === 24 && good.stats.postsPerWeek > 4 && good.stats.daysSinceLastPost < 2 && good.stats.engagementRate > 2);
 
+  check('the report carries a small public snapshot (bio, link, contact, latest captions) for the optional AI step', good.snapshot && /Specialty coffee/.test(good.snapshot.bio) && good.snapshot.captions.length === 5 && good.snapshot.captions.every((c) => c.length <= 200) && typeof good.snapshot.hasContact === 'boolean');
+
   // ---- a neglected account
   const bad = Audit.analyze({
     platform: 'instagram', now: NOW,

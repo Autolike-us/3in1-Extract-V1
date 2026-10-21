@@ -181,7 +181,14 @@
       avgHashtags: content.info.avgHashtags != null ? Math.round(content.info.avgHashtags * 10) / 10 : null,
       engagementRate: eng.info.rate != null ? Math.round(eng.info.rate * 10000) / 100 : null,
     };
-    return { platform, score, grade: grade(score), verdict: verdict(score), sections, topFixes: fixes.slice(0, 5), stats, notes, guide: { engagement: g.engLabel } };
+    /* what the optional "Copy audit for AI" step shares (public bio and latest captions); never sent anywhere by the extension itself */
+    const web0 = [].concat(p.website || p.websites || []).filter(Boolean)[0];
+    const snapshot = {
+      bio: String(p.bio || '').replace(/\s+/g, ' ').trim().slice(0, 400), link: web0 ? String(web0).slice(0, 120) : '',
+      hasContact: !![].concat(p.email || p.emails || [], p.phone || p.phones || []).filter(Boolean).length,
+      captions: list.slice(0, 5).map((x) => textOf(x).replace(/\s+/g, ' ').trim().slice(0, 200)).filter(Boolean),
+    };
+    return { platform, score, grade: grade(score), verdict: verdict(score), sections, topFixes: fixes.slice(0, 5), stats, snapshot, notes, guide: { engagement: g.engLabel } };
   }
 
   /** Flat spreadsheet row for CSV / Excel / JSON export (the nested report is kept in `audit`). */

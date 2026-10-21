@@ -304,6 +304,18 @@
     if (a.topFixes.length) { L.push('', 'Top fixes:'); a.topFixes.forEach((f, i) => L.push(`${i + 1}. ${f.label} — ${f.tip}`)); }
     return L.join('\n');
   }
+  /* the text the optional "Improve with AI" step on getaurorastudios.com expects: public profile facts only */
+  const PLAT_NAME = { instagram: 'Instagram', facebook: 'Facebook', tiktok: 'TikTok' };
+  function auditAiText(a, row) {
+    const st = a.stats, sn = a.snapshot || {}, nz = (x) => (x == null ? 'n/a' : x);
+    const L = [`AURORA AUDIT · ${PLAT_NAME[a.platform] || a.platform} · ${row.name || row.username || 'profile'} · score ${a.score}/100 (${a.grade})`,
+      `Followers ${nz(st.followers)} · posts read ${nz(st.postsAnalysed)} · ${nz(st.postsPerWeek)} posts/week · ${nz(st.daysSinceLastPost)} days since last post · ${nz(st.avgHashtags)} hashtags/post · ${nz(st.engagementRate)}% engagement`,
+      `BIO: ${sn.bio || '(empty)'}`, `LINK: ${sn.link || 'none'} · PUBLIC CONTACT: ${sn.hasContact ? 'yes' : 'no'}`];
+    if (sn.captions && sn.captions.length) L.push('LATEST CAPTIONS: ' + sn.captions.map((c) => '“' + c + '”').join(' · '));
+    L.push('SECTION SCORES: ' + a.sections.map((s) => `${s.label} ${s.score == null ? 'not scored' : s.score + '/' + s.max}`).join(' · '));
+    if (a.topFixes.length) L.push('TOP FIXES: ' + a.topFixes.map((f, i) => `${i + 1}. ${f.label} — ${f.tip}`).join(' | '));
+    return L.join('\n');
+  }
   function renderAudit(v, run) {
     const row = S.rows[0], a = row.audit, c = AUD_COLOR(a.score), st = a.stats;
     const chip = (k, val) => (val == null || val === '' ? '' : `<span class="achip"><b>${h(String(val))}</b> ${h(k)}</span>`);
@@ -317,6 +329,8 @@
           <div class="ahead"><div class="agrade" style="background:${c}">${h(a.grade)}</div><h3>${h(row.name || row.username || 'This profile')}</h3><p>${h(a.verdict)}</p>
             <div class="achips">${chip('followers', st.followers != null ? st.followers.toLocaleString() : null)}${chip('posts read', st.postsAnalysed)}${chip('posts / week', st.postsPerWeek)}${chip('days since last post', st.daysSinceLastPost)}${chip('hashtags / post', st.avgHashtags)}${chip('% engagement', st.engagementRate)}</div></div>
         </div>
+        <div class="aiup"><div><h4>✦ Improve this profile with AI <span class="pill hot">new</span></h4><p>Get 3 bio options, a plain-English fix plan and caption ideas. Nothing is sent from here: you copy the audit and paste it on our website. Needs a free Aurora account and uses 3 replies.</p></div>
+          <div class="aibtns"><button class="btn primary" data-x="copyai">Copy audit for AI &amp; open Aurora ↗</button><button class="btn" data-x="copyaionly">Copy audit only</button></div></div>
         ${a.notes.length ? `<div class="warn">ℹ️ ${a.notes.map(h).join('<br>')}</div>` : ''}
         ${a.topFixes.length ? `<h4 class="asub">Your top fixes</h4><ol class="afixes">${a.topFixes.map((f) => `<li><span class="adot" style="background:${DOT[f.level]}"></span><div><b>${h(f.label)}</b><span>${h(f.tip)}</span></div></li>`).join('')}</ol>` : '<div class="warn" style="background:rgba(18,165,148,.12);border-color:rgba(18,165,148,.35)">🎉 Nothing major to fix — keep it up.</div>'}
         <h4 class="asub">Score breakdown</h4>
@@ -331,7 +345,11 @@
       </div>`;
     v.onclick = async (e) => {
       const b = e.target.closest('[data-x]'); if (!b) return;
-      if (b.dataset.x === 'copyaudit') { try { await navigator.clipboard.writeText(auditText(a, row)); toast('Summary copied'); } catch (_) { toast('Could not copy'); } }
+      if (b.dataset.x === 'copyai' || b.dataset.x === 'copyaionly') {
+        try { await navigator.clipboard.writeText(auditAiText(a, row)); } catch (_) { toast('Could not copy'); return; }
+        if (b.dataset.x === 'copyai') { toast('Audit copied — paste it on the page that just opened'); window.open(`${C.site}audit-ai/?utm_source=extract&utm_medium=extension&utm_campaign=audit_ai`, '_blank', 'noopener'); }
+        else toast('Audit copied — paste it at getaurorastudios.com/audit-ai');
+      } else if (b.dataset.x === 'copyaudit') { try { await navigator.clipboard.writeText(auditText(a, row)); toast('Summary copied'); } catch (_) { toast('Could not copy'); } }
       else act(b.dataset.x, run, S.rows);
     };
   }
