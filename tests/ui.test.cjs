@@ -122,6 +122,7 @@ const stub = ([runs, rows, tabs, vrows, arows]) => {
   check('report shows the score, grade and verdict', (await pg.textContent('.agauge b')) === String(AREPORT.score) && (await pg.textContent('.agrade')) === AREPORT.grade && (await pg.textContent('.ahead p')).length > 5);
   check('report lists the top fixes and all five score sections with findings', (await pg.$$('.afixes li')).length >= 1 && (await pg.$$('.asec')).length === 5 && (await pg.$$('.asec li')).length >= 10);
   await pg.screenshot({ path: path.join(OUT, '9-audit.png'), fullPage: true });
+  await pg.setViewportSize({ width: 1280, height: 800 }); await pg.evaluate(() => window.scrollTo(0, 0)); await pg.waitForTimeout(150); await pg.screenshot({ path: path.join(OUT, 'store-audit-ai-1280x800.png') }); await pg.setViewportSize({ width: 1360, height: 900 });
   await pg.click('[data-x=copyaudit]'); await pg.waitForTimeout(150);
   const clip = await pg.evaluate(() => window.__clip);
   check('Copy summary puts the score, sections and fixes on the clipboard', new RegExp('Score ' + AREPORT.score + '/100').test(clip) && /Top fixes:/.test(clip) && /Bio & profile:/.test(clip));
