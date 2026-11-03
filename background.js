@@ -54,32 +54,65 @@ async function navigate(tabId, url) {
   await sleep(2500); // let the single-page app render its first screen
 }
 
-// Chrome pauses a tab you cannot see. Give the page tab its own window (not focused, so you stay where you are): a visible window keeps loading while you use other tabs.
-async function keepVisible(tabId, runId) {
-  try {
-    const t = await chrome.tabs.get(tabId);
-    const siblings = await chrome.tabs.query({ windowId: t.windowId });
-    if (siblings.length > 1) {
-      const from = await chrome.windows.get(t.windowId);
-      const w = await chrome.windows.create({ tabId, type: 'normal', focused: false, state: 'normal', width: 900, height: 760, left: Math.max(0, (from.left || 0) + 60), top: Math.max(0, (from.top || 0) + 60) });
-      await logBg('info', 'page tab moved to its own window', 'window ' + w.id);
-      await updateRun(runId, { note: 'Running in its own window — you can use other tabs and windows. Keep that window open and not minimized or fully covered; Chrome pauses a window you cannot see.' });
-    } else await updateRun(runId, { note: 'Running in its own window — keep it open and not minimized or fully covered.' });
-  } catch (e) {
-    await logBg('warn', 'could not open a separate window', String(e));
-    try { const t = await chrome.tabs.update(tabId, { active: true }); await chrome.windows.update(t.windowId, { focused: true }); await updateRun(runId, { note: 'Your page tab was brought to the front — keep it visible while Aurora works (Chrome pauses hidden tabs).' }); } catch (_) {}
-  }
+const waitLoaded = async (tabId) => {
+  const t0 = await chrome.tabs.get(tabId);
+  if (t0.status !== 'complete') await new Promise((res) => {
+    const done = () => { clearTimeout(t); chrome.tabs.onUpdated.removeListener(l); res(); };
+    const l = (id, info) => { if (id === tabId && info.status === 'complete') done(); };
+    const t = setTimeout(done, 25000);
+    chrome.tabs.onUpdated.addListener(l);
+  });
+  await sleep(2500); // let the single-page app render its first screen
+};
+
+/** Tell the tab the user started from (it keeps the progress card in its bottom-right corner). */
+const hud = async (run, payload) => { if (run && run.originTabId != null) { try { await chrome.tabs.sendMessage(run.originTabId, { aurora: true, type: 'hud', runId: run.id, label: run.label, ...payload }); } catch (_) {} } };
+
+/** The work happens in a small window of its own: the user's tab stays exactly where it is, and Chrome keeps a visible window loading. */
+async function openWorker(url, originTabId) {
+  const origin = await chrome.tabs.get(originTabId);
+  let left, top;
+  try { const from = await chrome.windows.get(origin.windowId); left = Math.max(0, (from.left || 0) + 80); top = Math.max(0, (from.top || 0) + 80); } catch (_) {}
+  const w = await chrome.windows.create({ url, type: 'popup', focused: false, width: 820, height: 720, left, top });
+  const tabId = w.tabs && w.tabs[0] && w.tabs[0].id;
+  if (tabId == null) throw new Error('no tab in the new window');
+  try { await chrome.windows.update(origin.windowId, { focused: true }); } catch (_) {}
+  await waitLoaded(tabId);
+  return { tabId, windowId: w.id };
 }
+const closeWorker = async (run) => { if (run && run.windowId != null) { try { await chrome.windows.remove(run.windowId); } catch (_) {} } };
+chrome.windows.onRemoved.addListener((windowId) => {
+  lock(async () => {
+    const runs = await get('runs', []);
+    const r = runs.find((x) => x.windowId === windowId && ['running', 'paused'].includes(x.status));
+    if (!r) return;
+    r.status = 'error'; r.error = 'The Aurora window was closed before the run finished. Start it again and leave that window open.'; r.finishedAt = Date.now(); r.note = '';
+    await chrome.storage.local.set({ runs });
+    hud(r, { state: 'done', msg: 'Stopped', count: r.count || 0 });
+  });
+});
 
 async function startRun({ tabId, kind, opts, label, platform, goto }) {
-  const run = { id: uid(), platform, kind, label: label || kind, opts, tabId, status: 'running', count: 0, note: '', startedAt: Date.now(), finishedAt: null, error: null };
+  const run = { id: uid(), platform, kind, label: label || kind, opts, tabId, originTabId: tabId, windowId: null, status: 'running', count: 0, note: '', startedAt: Date.now(), finishedAt: null, error: null };
   await lock(async () => { const runs = await get('runs', []); runs.unshift(run); await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] }); });
-  let res;
-  if (goto) { await logBg('info', 'navigating tab to start ' + kind, goto.replace(/\d{6,}/g, '<id>')); await updateRun(run.id, { note: 'Opening the right page…' }); try { await navigate(tabId, goto); } catch (e) { await logBg('error', 'navigation failed', String(e)); } }
-  try { for (let i = 0; ; i++) { try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); break; } catch (e) { if (i >= 8) throw e; await sleep(1000); } } }
-  catch (e) { await logBg('error', 'cannot reach tab ' + tabId, String(e)); res = { ok: false, error: 'Could not reach the page. Reload the Facebook / Instagram / TikTok tab and try again.' }; }
-  if (res && res.ok) await keepVisible(tabId, run.id);
-  if (!res || !res.ok) { await updateRun(run.id, { status: 'error', error: (res && res.error) || 'Failed to start', finishedAt: Date.now() }); return { ok: false, error: res && res.error }; }
+  let res, workTab = tabId;
+  try {
+    const origin = await chrome.tabs.get(tabId);
+    const url = goto || origin.url;
+    await updateRun(run.id, { note: 'Opening a small window for the run…' });
+    const w = await openWorker(url, tabId);
+    workTab = w.tabId; run.tabId = w.tabId; run.windowId = w.windowId;
+    await updateRun(run.id, { tabId: w.tabId, windowId: w.windowId, note: 'Running in its own small window, which closes by itself. Your tab stays as it is.' });
+    await logBg('info', 'run opened in its own window', 'window ' + w.windowId);
+  } catch (e) {
+    await logBg('warn', 'could not open a separate window — using your tab instead', String(e));
+    if (goto) { await logBg('info', 'navigating tab to start ' + kind, goto.replace(/\d{6,}/g, '<id>')); await updateRun(run.id, { note: 'Opening the right page…' }); try { await navigate(tabId, goto); } catch (e2) { await logBg('error', 'navigation failed', String(e2)); } }
+    run.originTabId = null; await updateRun(run.id, { originTabId: null });
+  }
+  try { for (let i = 0; ; i++) { try { res = await chrome.tabs.sendMessage(workTab, { aurora: true, type: 'start', runId: run.id, kind, opts }); break; } catch (e) { if (i >= 8) throw e; await sleep(1000); } } }
+  catch (e) { await logBg('error', 'cannot reach tab ' + workTab, String(e)); res = { ok: false, error: 'Could not reach the page. Reload the Facebook / Instagram / TikTok tab and try again.' }; }
+  if (!res || !res.ok) { await closeWorker(run); await updateRun(run.id, { status: 'error', error: (res && res.error) || 'Failed to start', finishedAt: Date.now() }); return { ok: false, error: res && res.error }; }
+  hud(run, { state: 'start' });
   return { ok: true, runId: run.id };
 }
 
@@ -95,11 +128,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
     switch (msg && msg.type) {
       case 'rows': { const b = buffers.get(msg.runId) || []; b.push(...msg.rows); buffers.set(msg.runId, b); scheduleFlush(); return send({}); }
       case 'log': { logBuf.push({ ...msg.entry, r: msg.runId }); scheduleFlush(); return send({}); }
-      case 'progress': await updateRun(msg.runId, { count: msg.count, note: msg.note || '' }); return send({});
+      case 'progress': { const r = await updateRun(msg.runId, { count: msg.count, note: msg.note || '' }); hud(r, { state: 'progress', count: msg.count, note: msg.note || '' }); return send({}); }
       case 'done': {
         await flush();
-        await updateRun(msg.runId, { count: msg.count, status: msg.error ? 'error' : msg.stopped ? 'stopped' : 'done', error: msg.error, finishedAt: Date.now(), note: '', snapshot: msg.snapshot || null, warning: msg.warning || '' });
-        return send({});
+        const r = await updateRun(msg.runId, { count: msg.count, status: msg.error ? 'error' : msg.stopped ? 'stopped' : 'done', error: msg.error, finishedAt: Date.now(), note: '', snapshot: msg.snapshot || null, warning: msg.warning || '' });
+        hud(r, { state: 'done', msg: msg.error ? 'Stopped — ' + String(msg.error).slice(0, 80) : msg.stopped ? 'Stopped' : 'Done', count: msg.count });
+        send({});
+        if (r && r.windowId != null) setTimeout(() => closeWorker(r), 1500);
+        return;
       }
       case 'startRun': return send(await startRun(msg));
       case 'stopRun': { const r = (await get('runs', [])).find((x) => x.id === msg.runId); if (r) { try { await chrome.tabs.sendMessage(r.tabId, { aurora: true, type: 'stop' }); } catch (_) {} } return send({ ok: true }); }

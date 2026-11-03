@@ -85,7 +85,7 @@
   }
 
   /* ---------- tasks ---------- */
-  async function fetchProfile(username, opt = { retries: 3, wait: 10000 }) {
+  async function fetchProfile(username, opt = { retries: 1, wait: 6000 }) {
     const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, opt);
     if (!j.data || !j.data.user) throw new Error('Profile not found or not visible to your account.');
     return j.data.user;
@@ -225,14 +225,28 @@
     return A.qa('a[href]').find((a) => re.test(a.getAttribute('href') || '')) || A.qa('header a, header li, main header *').find((e) => new RegExp('\\b' + which + '\\b', 'i').test(A.txt(e)) && A.txt(e).length < 30 && (e.tagName === 'A' || e.closest('a')));
   }
   async function listDom(ctx, which) {
+    const wanted = new RegExp(which === 'likers' ? 'likes' : which, 'i');
+    const matches = (d) => !!d && wanted.test((d.innerText || '').slice(0, 200));
     let dlg = A.q('[role="dialog"]');
+    if (dlg && !matches(dlg)) { // a leftover pop-up (for example the previous list): wait for it to finish loading, otherwise close it
+      for (let i = 0; i < 6 && !matches(dlg); i++) { await A.sleep(500); dlg = A.q('[role="dialog"]') || dlg; }
+      if (!matches(dlg)) {
+        ctx.log('info', `${which}: closing a different pop-up first`);
+        const x = A.qa('[aria-label="Close"], svg[aria-label="Close"]', dlg)[0];
+        if (x) (x.closest('button, [role="button"]') || x).dispatchEvent(new MouseEvent('click', { bubbles: true })); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+        for (let i = 0; i < 10 && A.q('[role="dialog"]'); i++) await A.sleep(300);
+        dlg = A.q('[role="dialog"]');
+      }
+    }
     if (!dlg) {
       const link = which === 'likers' ? (A.qa('a[href$="/liked_by/"]')[0] || A.qa('a, span, button').find((e) => /^[\d.,KkM]+ likes?$|^liked by/i.test(A.txt(e)) && A.txt(e).length < 40)) : findListLink(which);
       ctx.log('info', `${which}: link ${link ? 'found' : 'NOT found'}`, link ? '' : 'follow-ish hrefs: ' + A.qa('a[href*="follow"]').slice(0, 8).map((a) => a.getAttribute('href').replace(/^\/[^/]+/, '/<user>')).join(' , '));
       if (link) { (link.closest('a') || link).click(); for (let i = 0; i < 20 && !dlg; i++) { await A.sleep(300); dlg = A.q('[role="dialog"]'); } }
     }
     if (!dlg) throw new Error(`Couldn't open the ${which} list. Click "${which}" on the profile yourself so the list pops up, then press Start again.`);
-    if (!new RegExp(which === 'likers' ? 'likes' : which, 'i').test((dlg.innerText || '').slice(0, 200))) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
+    // the pop-up appears before its title and rows are filled in: give it a few seconds
+    for (let i = 0; i < 16 && !matches(dlg); i++) { await A.sleep(400); dlg = A.q('[role="dialog"]') || dlg; }
+    if (!matches(dlg)) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
     ctx.log('info', `${which}: dialog open`);
     const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
     const seen = new Set();
