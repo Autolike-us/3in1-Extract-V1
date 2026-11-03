@@ -248,11 +248,12 @@
     for (let i = 0; i < 16 && !matches(dlg); i++) { await A.sleep(400); dlg = A.q('[role="dialog"]') || dlg; }
     if (!matches(dlg)) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
     ctx.log('info', `${which}: dialog open`);
-    const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
+    const cur = () => A.q('[role="dialog"]') || dlg; // Instagram re-draws the pop-up while it loads, so never hold on to the first element
+    const boxOf = () => A.qa('div', cur()).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY));
     const seen = new Set();
     await A.scrollCollect(ctx, () => {
       let added = 0;
-      for (const a of A.qa('a[href^="/"]', dlg)) {
+      for (const a of A.qa('a[href^="/"]', cur())) {
         const m = (a.getAttribute('href') || '').match(/^\/([\w.]+)\/?$/);
         if (!m || RESERVED_HANDLE.test(m[1]) || seen.has(m[1])) continue; seen.add(m[1]);
         const row = a.parentElement.parentElement.parentElement || a;
@@ -260,7 +261,7 @@
         added += ctx.emit({ id: m[1], username: m[1], name: lines[0] || '', profileUrl: 'https://www.instagram.com/' + m[1] + '/', avatar: (A.q('img', row) || {}).src || '' });
       }
       ctx.progress(); return added;
-    }, { container: box, patience: 6 });
+    }, { container: boxOf, patience: 6 });
   }
   const listTask = (which) => async (ctx) => {
     try { await listDom(ctx, which); if (ctx.count() > 0 || ctx.stopped()) return; ctx.log('warn', which + ': dialog gave no rows — trying the API'); }

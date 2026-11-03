@@ -225,7 +225,7 @@
         added += ctx.emit({ id: u, username: u, name: lines[0] || '', url: 'https://www.tiktok.com/@' + u, list: which, avatar: (A.q('img', row) || {}).src || '' });
       }
       ctx.progress(); return added;
-    }, { container: box, patience: 6 });
+    }, { container: () => A.qa('ul, div', popup() || pop).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)), patience: 6 });
   }
 
   A.register('tiktok', {

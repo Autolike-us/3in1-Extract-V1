@@ -58,7 +58,7 @@
   };
 
   A.scrollCollect = async function (ctx, pull, { container, patience = 5, async: isAsync, process, nudge, slow, hydrated } = {}) {
-    let idle = 0, scroller = container || null, logged = 0;
+    let idle = 0, logged = 0;
     const k = Math.max(0.5, Math.min(2, (Number(ctx.opts && ctx.opts.delayMs) || 1200) / 1200)); // user's pace: Gentle 1.8 · Normal 1 · Fast 0.5
     const de = () => document.scrollingElement || document.documentElement;
     const step = (el, dy) => { const before = el.scrollTop; el.scrollBy({ top: dy, behavior: 'auto' }); return el.scrollTop !== before; };
@@ -74,6 +74,8 @@
     };
     while (!ctx.stopped()) {
       await A.waitVisible(ctx);
+      // `container` may be a function: pop-up lists are re-drawn by the site, so the scrolling box is looked up again every round
+      const cont = typeof container === 'function' ? container() : container, scroller = cont && cont.isConnected ? cont : null;
       const added = isAsync ? await process(pull()) : pull();
       if (ctx.count() >= ctx.limit) break;
       idle = added > 0 ? 0 : idle + 1;
@@ -81,7 +83,7 @@
       const el = scroller || de();
       // slow mode (Facebook): a bit less than a screen at a time, then wait only as long as the posts on screen need to draw
       const frac = k <= 0.6 ? 0.8 : k >= 1.8 ? 0.45 : 0.6;
-      const dy = slow ? Math.round((container ? container.clientHeight : innerHeight) * frac) : Math.max(500, (container ? container.clientHeight : innerHeight) * 0.9);
+      const dy = slow ? Math.round((scroller ? scroller.clientHeight : innerHeight) * frac) : Math.max(500, (scroller ? scroller.clientHeight : innerHeight) * 0.9);
       if (slow && idle >= 1) { // nothing new drew: back up a little and come forward again
         const up = Math.round(innerHeight * (idle >= 3 ? 1.6 : 0.8));
         const b0 = el.scrollTop; step(el, -up); const back = b0 - el.scrollTop; await A.sleep(hydrated ? 500 + Math.random() * 250 : 900 + Math.random() * 400);
