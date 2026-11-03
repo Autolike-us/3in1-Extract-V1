@@ -85,7 +85,7 @@
   }
 
   /* ---------- tasks ---------- */
-  async function fetchProfile(username, opt = { retries: 1, wait: 8000 }) {
+  async function fetchProfile(username, opt = { retries: 3, wait: 10000 }) {
     const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, opt);
     if (!j.data || !j.data.user) throw new Error('Profile not found or not visible to your account.');
     return j.data.user;

@@ -46,7 +46,7 @@
   A.waitVisible = async (ctx) => {
     if (!document.hidden) return false;
     A.log('warn', 'this tab is in the background — pausing (Chrome stops sites from loading more while a tab is hidden)');
-    ctx.progress('Paused — bring this tab to the front so the site keeps loading');
+    ctx.progress('Paused — this window is hidden or minimized. Show it (it can stay in the background beside your other windows) and Aurora continues by itself');
     await new Promise((res) => {
       let t;
       const f = () => { if (!document.hidden || ctx.stopped()) { document.removeEventListener('visibilitychange', f); clearInterval(t); res(); } };

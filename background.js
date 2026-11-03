@@ -54,6 +54,23 @@ async function navigate(tabId, url) {
   await sleep(2500); // let the single-page app render its first screen
 }
 
+// Chrome pauses a tab you cannot see. Give the page tab its own window (not focused, so you stay where you are): a visible window keeps loading while you use other tabs.
+async function keepVisible(tabId, runId) {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    const siblings = await chrome.tabs.query({ windowId: t.windowId });
+    if (siblings.length > 1) {
+      const from = await chrome.windows.get(t.windowId);
+      const w = await chrome.windows.create({ tabId, type: 'normal', focused: false, state: 'normal', width: 900, height: 760, left: Math.max(0, (from.left || 0) + 60), top: Math.max(0, (from.top || 0) + 60) });
+      await logBg('info', 'page tab moved to its own window', 'window ' + w.id);
+      await updateRun(runId, { note: 'Running in its own window — you can use other tabs and windows. Keep that window open and not minimized or fully covered; Chrome pauses a window you cannot see.' });
+    } else await updateRun(runId, { note: 'Running in its own window — keep it open and not minimized or fully covered.' });
+  } catch (e) {
+    await logBg('warn', 'could not open a separate window', String(e));
+    try { const t = await chrome.tabs.update(tabId, { active: true }); await chrome.windows.update(t.windowId, { focused: true }); await updateRun(runId, { note: 'Your page tab was brought to the front — keep it visible while Aurora works (Chrome pauses hidden tabs).' }); } catch (_) {}
+  }
+}
+
 async function startRun({ tabId, kind, opts, label, platform, goto }) {
   const run = { id: uid(), platform, kind, label: label || kind, opts, tabId, status: 'running', count: 0, note: '', startedAt: Date.now(), finishedAt: null, error: null };
   await lock(async () => { const runs = await get('runs', []); runs.unshift(run); await chrome.storage.local.set({ runs, ['rows:' + run.id]: [] }); });
@@ -61,7 +78,7 @@ async function startRun({ tabId, kind, opts, label, platform, goto }) {
   if (goto) { await logBg('info', 'navigating tab to start ' + kind, goto.replace(/\d{6,}/g, '<id>')); await updateRun(run.id, { note: 'Opening the right page…' }); try { await navigate(tabId, goto); } catch (e) { await logBg('error', 'navigation failed', String(e)); } }
   try { for (let i = 0; ; i++) { try { res = await chrome.tabs.sendMessage(tabId, { aurora: true, type: 'start', runId: run.id, kind, opts }); break; } catch (e) { if (i >= 8) throw e; await sleep(1000); } } }
   catch (e) { await logBg('error', 'cannot reach tab ' + tabId, String(e)); res = { ok: false, error: 'Could not reach the page. Reload the Facebook / Instagram / TikTok tab and try again.' }; }
-  if (res && res.ok) { try { const t = await chrome.tabs.update(tabId, { active: true }); await chrome.windows.update(t.windowId, { focused: true }); await updateRun(run.id, { note: 'Your page tab was brought to the front — keep it visible while Aurora works (Chrome pauses hidden tabs).' }); } catch (_) {} }
+  if (res && res.ok) await keepVisible(tabId, run.id);
   if (!res || !res.ok) { await updateRun(run.id, { status: 'error', error: (res && res.error) || 'Failed to start', finishedAt: Date.now() }); return { ok: false, error: res && res.error }; }
   return { ok: true, runId: run.id };
 }
