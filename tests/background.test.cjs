@@ -1,6 +1,6 @@
 // The service worker must not lose log lines, rows or run updates when many messages arrive at once.
 const vm = require('node:vm'), fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
-const store = {}; let listener;
+const store = {}; let listener; const calls = [];
 const delay = () => new Promise((r) => setTimeout(r, Math.random() * 6)); // slow, jittery storage exposes races
 const chrome = {
   runtime: { id: 'x', onMessage: { addListener: (f) => { listener = f; } }, onInstalled: { addListener() {} }, onStartup: { addListener() {} }, getURL: (u) => u },
@@ -10,8 +10,8 @@ const chrome = {
     remove: async (k) => { await delay(); for (const key of [].concat(k)) delete store[key]; },
   } },
   declarativeNetRequest: { updateSessionRules: async () => {} },
-  tabs: { query: async () => [], create: async () => {}, update: async () => ({}), get: async () => ({}), sendMessage: async () => ({ ok: true }), onUpdated: { addListener() {}, removeListener() {} } },
-  windows: { update: async () => {} },
+  tabs: { query: async () => [], create: async () => {}, update: async () => ({}), get: async (id) => (id === 1 ? { id: 1, windowId: 1, url: 'https://www.instagram.com/shop/', status: 'complete' } : { id, windowId: 5, status: 'complete' }), sendMessage: async (id, m) => { calls.push(['msg', id, m.type, m.state]); return { ok: true }; }, onUpdated: { addListener() {}, removeListener() {} } },
+  windows: { update: async () => {}, get: async () => ({ left: 0, top: 0 }), create: async (o) => { calls.push(['create', o.type, o.focused, o.url]); return { id: 5, tabs: [{ id: 42 }] }; }, remove: async (id) => { calls.push(['remove', id]); }, onRemoved: { addListener() {} } },
 };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8'), { chrome, setTimeout, clearTimeout, console, Date, Math, JSON, Promise, Array, Object, String });
 const send = (m) => new Promise((r) => listener(m, {}, r));
@@ -28,5 +28,19 @@ const send = (m) => new Promise((r) => listener(m, {}, r));
   assert.equal(lines.size, 300, 'all 300 log lines kept, got ' + lines.size);
   assert.equal(store['rows:r1'].length, 120, 'all 120 rows kept, got ' + store['rows:r1'].length);
   assert.equal(store.runs[0].status, 'done'); assert.equal(store.runs[0].count, 120); assert.equal(store.runs[0].warning, 'w');
+  // the run happens in its own small window; the user's tab is left alone, gets a progress card, and the window closes afterwards
+  const started = await send({ type: 'startRun', tabId: 1, kind: 'followers', platform: 'instagram', label: 'IG', opts: {}, goto: null });
+  assert(started.ok, 'run started');
+  const run = store.runs.find((r) => r.id === started.runId);
+  assert.equal(run.tabId, 42, 'work runs in the new window'); assert.equal(run.originTabId, 1, 'user tab remembered');
+  assert(calls.some((c) => c[0] === 'create' && c[1] === 'popup' && c[2] === false && c[3] === 'https://www.instagram.com/shop/'), 'opened an unfocused popup window on the same page');
+  assert(calls.some((c) => c[0] === 'msg' && c[1] === 42 && c[2] === 'start'), 'start sent to the new window');
+  assert(!calls.some((c) => c[0] === 'msg' && c[1] === 1 && c[2] === 'start'), 'user tab is never started');
+  assert(calls.some((c) => c[0] === 'msg' && c[1] === 1 && c[2] === 'hud' && c[3] === 'start'), 'progress card sent to the user tab');
+  await send({ type: 'done', runId: started.runId, count: 3, stopped: false, error: null });
+  await new Promise((r) => setTimeout(r, 1900));
+  assert(calls.some((c) => c[0] === 'msg' && c[1] === 1 && c[3] === 'done'), 'user tab told it finished');
+  assert(calls.some((c) => c[0] === 'remove' && c[1] === 5), 'small window closed after completion');
+  console.log('PASS run opens its own window, keeps the user tab, shows a card there and closes the window');
   console.log('PASS background keeps every log line, row and run update under concurrent messages');
 })().catch((e) => { console.error(e); process.exit(1); });

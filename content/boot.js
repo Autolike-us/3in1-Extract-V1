@@ -31,6 +31,19 @@
     return api;
   }
 
+  /** Progress card in the tab you started from, while the run itself happens in a small window of its own. */
+  let hudUi = null, hudRun = null;
+  function hud(m) {
+    if (run && !run.done) return; // this tab is running it itself and already has its own card
+    if (m.state === 'start' || !hudUi || hudRun !== m.runId) {
+      document.getElementById('aurora-extract-badge')?.remove();
+      hudRun = m.runId;
+      hudUi = badge({ set stop(v) { try { chrome.runtime.sendMessage({ type: 'stopRun', runId: m.runId }); } catch (_) {} } }, m.label || 'Aurora Extract');
+    }
+    if (m.state === 'done') { hudUi.done(m.msg || 'Done', m.count || 0); hudUi = null; }
+    else hudUi.set(m.count || 0, m.note);
+  }
+
   function describe() {
     const id = platformId();
     if (!id) return { platform: null };
@@ -90,6 +103,7 @@
   chrome.runtime.onMessage.addListener((msg, _s, send) => {
     if (!msg || !msg.aurora) return;
     if (msg.type === 'describe') send(describe());
+    else if (msg.type === 'hud') { hud(msg); send({ ok: true }); }
     else if (msg.type === 'start') start(msg).then(send);
     else if (msg.type === 'stop') { if (run) run.stop = true; send({ ok: true }); }
     else if (msg.type === 'pause') { if (run) run.paused = !!msg.on; send({ ok: true }); }

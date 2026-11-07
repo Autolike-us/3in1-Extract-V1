@@ -85,7 +85,7 @@
   }
 
   /* ---------- tasks ---------- */
-  async function fetchProfile(username, opt = { retries: 1, wait: 8000 }) {
+  async function fetchProfile(username, opt = { retries: 1, wait: 6000 }) {
     const j = await A.getJSON(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, H, opt);
     if (!j.data || !j.data.user) throw new Error('Profile not found or not visible to your account.');
     return j.data.user;
@@ -225,20 +225,35 @@
     return A.qa('a[href]').find((a) => re.test(a.getAttribute('href') || '')) || A.qa('header a, header li, main header *').find((e) => new RegExp('\\b' + which + '\\b', 'i').test(A.txt(e)) && A.txt(e).length < 30 && (e.tagName === 'A' || e.closest('a')));
   }
   async function listDom(ctx, which) {
+    const wanted = new RegExp(which === 'likers' ? 'likes' : which, 'i');
+    const matches = (d) => !!d && wanted.test((d.innerText || '').slice(0, 200));
     let dlg = A.q('[role="dialog"]');
+    if (dlg && !matches(dlg)) { // a leftover pop-up (for example the previous list): wait for it to finish loading, otherwise close it
+      for (let i = 0; i < 6 && !matches(dlg); i++) { await A.sleep(500); dlg = A.q('[role="dialog"]') || dlg; }
+      if (!matches(dlg)) {
+        ctx.log('info', `${which}: closing a different pop-up first`);
+        const x = A.qa('[aria-label="Close"], svg[aria-label="Close"]', dlg)[0];
+        if (x) (x.closest('button, [role="button"]') || x).dispatchEvent(new MouseEvent('click', { bubbles: true })); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+        for (let i = 0; i < 10 && A.q('[role="dialog"]'); i++) await A.sleep(300);
+        dlg = A.q('[role="dialog"]');
+      }
+    }
     if (!dlg) {
       const link = which === 'likers' ? (A.qa('a[href$="/liked_by/"]')[0] || A.qa('a, span, button').find((e) => /^[\d.,KkM]+ likes?$|^liked by/i.test(A.txt(e)) && A.txt(e).length < 40)) : findListLink(which);
       ctx.log('info', `${which}: link ${link ? 'found' : 'NOT found'}`, link ? '' : 'follow-ish hrefs: ' + A.qa('a[href*="follow"]').slice(0, 8).map((a) => a.getAttribute('href').replace(/^\/[^/]+/, '/<user>')).join(' , '));
       if (link) { (link.closest('a') || link).click(); for (let i = 0; i < 20 && !dlg; i++) { await A.sleep(300); dlg = A.q('[role="dialog"]'); } }
     }
     if (!dlg) throw new Error(`Couldn't open the ${which} list. Click "${which}" on the profile yourself so the list pops up, then press Start again.`);
-    if (!new RegExp(which === 'likers' ? 'likes' : which, 'i').test((dlg.innerText || '').slice(0, 200))) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
+    // the pop-up appears before its title and rows are filled in: give it a few seconds
+    for (let i = 0; i < 16 && !matches(dlg); i++) { await A.sleep(400); dlg = A.q('[role="dialog"]') || dlg; }
+    if (!matches(dlg)) throw new Error(`A pop-up is open, but it isn't the ${which} list. Close it, then press Start again.`);
     ctx.log('info', `${which}: dialog open`);
-    const box = A.qa('div', dlg).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY)) || undefined;
+    const cur = () => A.q('[role="dialog"]') || dlg; // Instagram re-draws the pop-up while it loads, so never hold on to the first element
+    const boxOf = () => A.qa('div', cur()).find((d) => d.scrollHeight > d.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(d).overflowY));
     const seen = new Set();
     await A.scrollCollect(ctx, () => {
       let added = 0;
-      for (const a of A.qa('a[href^="/"]', dlg)) {
+      for (const a of A.qa('a[href^="/"]', cur())) {
         const m = (a.getAttribute('href') || '').match(/^\/([\w.]+)\/?$/);
         if (!m || RESERVED_HANDLE.test(m[1]) || seen.has(m[1])) continue; seen.add(m[1]);
         const row = a.parentElement.parentElement.parentElement || a;
@@ -246,7 +261,7 @@
         added += ctx.emit({ id: m[1], username: m[1], name: lines[0] || '', profileUrl: 'https://www.instagram.com/' + m[1] + '/', avatar: (A.q('img', row) || {}).src || '' });
       }
       ctx.progress(); return added;
-    }, { container: box, patience: 6 });
+    }, { container: boxOf, patience: 6 });
   }
   const listTask = (which) => async (ctx) => {
     try { await listDom(ctx, which); if (ctx.count() > 0 || ctx.stopped()) return; ctx.log('warn', which + ': dialog gave no rows — trying the API'); }
